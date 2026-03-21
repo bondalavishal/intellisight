@@ -1,0 +1,41 @@
+import re
+
+BLOCKED_KEYWORDS = [
+    "DROP", "DELETE", "UPDATE", "INSERT",
+    "ALTER", "TRUNCATE", "CREATE", "REPLACE",
+    "MERGE", "GRANT", "REVOKE"
+]
+
+ALLOWED_VIEWS = [
+    "vw_monthly_revenue",
+    "vw_orders_metrics",
+    "vw_product_metrics",
+    "vw_seller_metrics"
+]
+
+
+def validate_sql(sql: str) -> tuple[bool, str]:
+    sql_upper = sql.strip().upper()
+
+    if not (sql_upper.startswith("SELECT") or sql_upper.startswith("WITH")):
+        return False, "Query must start with SELECT or WITH."
+
+    for keyword in BLOCKED_KEYWORDS:
+        if re.search(r'\b' + keyword + r'\b', sql_upper):
+            return False, f"Blocked keyword: {keyword}"
+
+    if not any(view.lower() in sql.lower() for view in ALLOWED_VIEWS):
+        return False, f"Query must reference one of the allowed views: {ALLOWED_VIEWS}"
+
+    return True, "OK"
+
+
+def enforce_limit(sql: str, max_limit: int = 100) -> str:
+    """Auto-appends LIMIT 100 if missing. Caps any LIMIT above max_limit."""
+    if "LIMIT" not in sql.upper():
+        sql = sql.rstrip() + "\nLIMIT 100"
+    else:
+        match = re.search(r'LIMIT\s+(\d+)', sql, re.IGNORECASE)
+        if match and int(match.group(1)) > max_limit:
+            sql = re.sub(r'LIMIT\s+\d+', f'LIMIT {max_limit}', sql, flags=re.IGNORECASE)
+    return sql

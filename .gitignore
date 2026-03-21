@@ -1,0 +1,18 @@
+# Credentials — never commit
+.env
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Generated files — recreated on deploy
+app/rag/chroma_db/
+
+# Runtime data
+app/eval/eval_log.csv
+
+# macOS
+.DS_Store
