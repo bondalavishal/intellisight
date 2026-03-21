@@ -1,6 +1,7 @@
 import re
 import time
-import httpx
+import os
+from groq import Groq
 
 from app.llm.intent import classify_intent
 from app.llm.sql_generator import generate_sql
@@ -9,8 +10,7 @@ from app.sql.connector import run_query
 from app.eval.cache import get_cached, save_to_cache, cache_stats
 from app.eval.logger import log, get_stats
 
-OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
-MODEL = "mannix/defog-llama3-sqlcoder-8b"
+_groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 # ---------------------------------------------------------------------------
 # Pre-flight: unanswerable questions
@@ -244,17 +244,13 @@ def summarise_results(question: str, results: list[dict]) -> str:
     if len(results) > 20:
         results_text += f"\n... and {len(results) - 20} more rows."
 
-    response = httpx.post(
-        OLLAMA_URL,
-        json={
-            "model": MODEL,
-            "prompt": SUMMARY_PROMPT.format(question=question, results=results_text),
-            "stream": False,
-            "options": {"temperature": 0, "num_predict": 100}
-        },
-        timeout=120
+    response = _groq_client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": SUMMARY_PROMPT.format(question=question, results=results_text)}],
+        temperature=0,
+        max_tokens=150,
     )
-    raw = response.json()["response"].strip()
+    raw = response.choices[0].message.content.strip()
     return _clean_summary(raw)
 
 
