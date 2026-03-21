@@ -15,9 +15,7 @@ CHROMA_DIR = os.path.join(RAG_DIR, "chroma_db")
 
 SIMILARITY_THRESHOLD = 0.92  # cosine similarity — must be very close to match
 
-_ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="all-MiniLM-L6-v2"
-)
+_ef = embedding_functions.ONNXMiniLM_L6_V2()
 
 _client     = None
 _collection = None
