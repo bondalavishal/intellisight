@@ -240,9 +240,29 @@ def handle_mention(event, say, client):
 
 
 # ---------------------------------------------------------------------------
+# Health check server (required for Render port detection)
+# ---------------------------------------------------------------------------
+import threading
+from flask import Flask as _Flask
+_health_app = _Flask(__name__)
+
+@_health_app.route("/health")
+def _health():
+    return "ok", 200
+
+def _run_health_server():
+    port = int(os.getenv("FLASK_PORT", 3000))
+    _health_app.run(host="0.0.0.0", port=port)
+
+
+# ---------------------------------------------------------------------------
 # Start
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     print("InsightBot starting...")
+    t = threading.Thread(target=_run_health_server, daemon=True)
+    t.start()
+    print(f"Health check running on port {os.getenv('FLASK_PORT', 3000)}")
     handler = SocketModeHandler(app, os.getenv("SLACK_APP_TOKEN"))
     handler.start()
+

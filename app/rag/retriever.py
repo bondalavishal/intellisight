@@ -10,9 +10,7 @@ from chromadb.utils import embedding_functions
 RAG_DIR    = os.path.dirname(__file__)
 CHROMA_DIR = os.path.join(RAG_DIR, "chroma_db")
 
-_ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="all-MiniLM-L6-v2"
-)
+_ef = embedding_functions.ONNXMiniLM_L6_V2()
 
 _client     = None
 _collection = None

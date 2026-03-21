@@ -58,9 +58,7 @@ def chunk_markdown(text: str, source: str) -> list[dict]:
 def load():
     print("Phase 4 RAG loader starting...")
 
-    ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name="all-MiniLM-L6-v2"
-    )
+    ef = embedding_functions.ONNXMiniLM_L6_V2()
 
     client = chromadb.PersistentClient(path=CHROMA_DIR)
 
