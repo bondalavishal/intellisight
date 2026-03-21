@@ -1,35 +1,35 @@
+import os
 import re
-import httpx
+from groq import Groq
 
 from app.rag.retriever import retrieve
 
-OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
-MODEL = "mannix/defog-llama3-sqlcoder-8b"
+_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-SQL_PROMPT = """### Instructions:
-Your task is to convert a question into a SQL query for Databricks SQL.
-Use ONLY the views provided in the DDL below. ONE view per query. NEVER join views.
-Never invent columns not listed. Never use SUM(*). Use COUNT(*) for row counts.
-Never use aggregates in WHERE — use HAVING. Always include LIMIT.
-Never use spaces in aliases — underscores only.
-For cancellations from vw_orders_metrics: SUM(CASE WHEN order_status = 'canceled' THEN 1 ELSE 0 END)
-For year comparisons: use vw_monthly_revenue GROUP BY year.
-If unanswerable (seller time trends, category cancellations):
+SQL_PROMPT = """You are an expert Databricks SQL generator. Convert the question into a single SQL query.
+
+STRICT RULES:
+- Use ONLY the views provided in the DDL below
+- ONE view per query — NEVER join views
+- Never invent columns not listed in the DDL
+- Never use SUM(*) — use COUNT(*) for row counts
+- Never use aggregates in WHERE — use HAVING
+- Always include LIMIT
+- Never use spaces in aliases — underscores only
+- For cancellations from vw_orders_metrics: SUM(CASE WHEN order_status = 'canceled' THEN 1 ELSE 0 END)
+- For year comparisons: use vw_monthly_revenue GROUP BY year
+- If the question cannot be answered from available views:
   SELECT 'This question cannot be answered from the available data.' AS message LIMIT 1
 
-### Input:
-Generate a SQL query that answers the question: `{question}`
+Question: {question}
 
-### DDL statements:
+DDL statements:
 {context}
 
-### Response:
-Based on the DDL statements, here is the SQL query that answers the question:
-```sql"""
+Reply with ONLY the SQL query inside a ```sql fence. No explanation, no commentary."""
 
 
 def _extract_sql(raw: str) -> str:
-    # Primary: extract from ```sql fence
     fence_match = re.search(r'```sql\s*(.*?)(?:```|$)', raw, re.DOTALL | re.IGNORECASE)
     if fence_match:
         sql = fence_match.group(1).strip()
@@ -47,23 +47,14 @@ def _extract_sql(raw: str) -> str:
 
 
 def generate_sql(question: str) -> str:
-    # Phase 4: retrieve relevant context from ChromaDB instead of hardcoded DDL
     context = retrieve(question)
-
     prompt = SQL_PROMPT.format(question=question, context=context)
-    response = httpx.post(
-        OLLAMA_URL,
-        json={
-            "model": MODEL,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "temperature": 0,
-                "num_predict": 512,
-                "stop": ["```", "###", "\n\n\n"]
-            }
-        },
-        timeout=120
+
+    response = _client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+        max_tokens=512,
     )
-    raw = response.json()["response"].strip()
+    raw = response.choices[0].message.content.strip()
     return _extract_sql(raw)
