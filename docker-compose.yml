@@ -1,0 +1,15 @@
+version: "3.9"
+
+services:
+  insightbot:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - chroma_data:/app/app/rag/chroma_db
+    ports:
+      - "3000:3000"
+
+volumes:
+  chroma_data:
