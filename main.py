@@ -183,6 +183,9 @@ def process_message(client, user: str, text: str, channel: str):
 
     else:
         # Multi-question — single progress bar for overall flow
+        import concurrent.futures
+        MAX_Q = 5
+        questions = questions[:MAX_Q]
         print(f"[InsightBot] Multi-question: {len(questions)} questions")
         msg = client.chat_postMessage(
             channel=channel,
@@ -199,7 +202,14 @@ def process_message(client, user: str, text: str, channel: str):
                 text=_progress_bar(pct, f"Question {i}/{len(questions)}: {q[:40]}...")
             )
             print(f"\n[InsightBot] Question {i}/{len(questions)}: {q}")
-            answer, _, _ = _answer_with_progress(client, channel, ts, q, idx=i)
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                    future = ex.submit(_answer_with_progress, client, channel, ts, q, i)
+                    answer, _, _ = future.result(timeout=90)
+            except concurrent.futures.TimeoutError:
+                answer = f"*{i}.* ⏱ Question timed out — try asking it separately."
+            except Exception as e:
+                answer = f"*{i}.* ❌ Error: {str(e)[:80]}"
             parts.append(answer)
 
         # Final update
