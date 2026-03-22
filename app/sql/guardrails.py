@@ -6,11 +6,22 @@ BLOCKED_KEYWORDS = [
     "MERGE", "GRANT", "REVOKE"
 ]
 
-ALLOWED_VIEWS = [
+ALLOWED_SOURCES = [
+    # Views
     "vw_monthly_revenue",
     "vw_orders_metrics",
     "vw_product_metrics",
-    "vw_seller_metrics"
+    "vw_seller_metrics",
+    # Raw tables
+    "olist_orders",
+    "olist_order_items",
+    "olist_products",
+    "olist_order_reviews",
+    "olist_sellers",
+    "olist_customers",
+    "olist_geolocation",
+    "olist_order_payments",
+    "product_category_translation",
 ]
 
 
@@ -24,14 +35,13 @@ def validate_sql(sql: str) -> tuple[bool, str]:
         if re.search(r'\b' + keyword + r'\b', sql_upper):
             return False, f"Blocked keyword: {keyword}"
 
-    if not any(view.lower() in sql.lower() for view in ALLOWED_VIEWS):
-        return False, f"Query must reference one of the allowed views: {ALLOWED_VIEWS}"
+    if not any(source.lower() in sql.lower() for source in ALLOWED_SOURCES):
+        return False, "Query must reference an allowed view or table."
 
     return True, "OK"
 
 
 def enforce_limit(sql: str, max_limit: int = 100) -> str:
-    """Auto-appends LIMIT 100 if missing. Caps any LIMIT above max_limit."""
     if "LIMIT" not in sql.upper():
         sql = sql.rstrip() + "\nLIMIT 100"
     else:
