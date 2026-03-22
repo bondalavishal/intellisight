@@ -55,6 +55,7 @@ def generate_sql(question: str) -> str:
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
         max_tokens=512,
+        timeout=45,
     )
     raw = response.choices[0].message.content.strip()
     return _extract_sql(raw)

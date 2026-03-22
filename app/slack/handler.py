@@ -249,6 +249,7 @@ def summarise_results(question: str, results: list[dict]) -> str:
         messages=[{"role": "user", "content": SUMMARY_PROMPT.format(question=question, results=results_text)}],
         temperature=0,
         max_tokens=150,
+        timeout=30,
     )
     raw = response.choices[0].message.content.strip()
     return _clean_summary(raw)
