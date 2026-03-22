@@ -275,15 +275,7 @@ if __name__ == "__main__":
     print(f"Health check running on port {os.getenv('FLASK_PORT', 3000)}")
     import time as _time
     _time.sleep(3)  # Give Flask time to bind port before socket connection
-    while True:
-        try:
-            handler = SocketModeHandler(app, os.getenv("SLACK_APP_TOKEN"))
-            handler.connect()
-            print("InsightBot connected to Slack.")
-            while handler.client.is_connected():
-                _time.sleep(10)
-            print("Socket disconnected — reconnecting...")
-        except Exception as e:
-            print(f"Socket error: {e} — retrying in 5s...")
-            _time.sleep(5)
+    print("InsightBot connected to Slack.")
+    handler = SocketModeHandler(app, os.getenv("SLACK_APP_TOKEN"))
+    handler.start()
 
