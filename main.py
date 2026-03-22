@@ -274,6 +274,7 @@ if __name__ == "__main__":
     t.start()
     print(f"Health check running on port {os.getenv('FLASK_PORT', 3000)}")
     import time as _time
+    _time.sleep(3)  # Give Flask time to bind port before socket connection
     while True:
         try:
             handler = SocketModeHandler(app, os.getenv("SLACK_APP_TOKEN"))
