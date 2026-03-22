@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+app/rag/chroma_db/
+app/eval/eval_log.csv
+.DS_Store
+*.egg-info/
+.git/
