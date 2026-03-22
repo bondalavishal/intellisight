@@ -268,14 +268,29 @@ def _run_health_server():
 # ---------------------------------------------------------------------------
 # Start
 # ---------------------------------------------------------------------------
+def _run_slack():
+    import time as _time
+    _time.sleep(3)  # Give Flask time to bind port first
+    while True:
+        try:
+            print("InsightBot connecting to Slack...")
+            handler = SocketModeHandler(app, os.getenv("SLACK_APP_TOKEN"))
+            handler.start()
+            print("Slack handler exited — reconnecting in 5s...")
+        except Exception as e:
+            print(f"Slack connection error: {e} — reconnecting in 5s...")
+        _time.sleep(5)
+
+
 if __name__ == "__main__":
     print("InsightBot starting...")
     t = threading.Thread(target=_run_health_server, daemon=True)
     t.start()
     print(f"Health check running on port {os.getenv('FLASK_PORT', 3000)}")
+    s = threading.Thread(target=_run_slack, daemon=True)
+    s.start()
+    # Keep main thread alive — Flask health server and Slack run as daemon threads
     import time as _time
-    _time.sleep(3)  # Give Flask time to bind port before socket connection
-    print("InsightBot connected to Slack.")
-    handler = SocketModeHandler(app, os.getenv("SLACK_APP_TOKEN"))
-    handler.start()
+    while True:
+        _time.sleep(60)
 

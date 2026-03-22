@@ -241,15 +241,24 @@ def summarise_results(question: str, results: list[dict]) -> str:
     if len(results) > 20:
         results_text += f"\n... and {len(results) - 20} more rows."
 
-    response = _groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": SUMMARY_PROMPT.format(question=question, results=results_text)}],
-        temperature=0,
-        max_tokens=150,
-        timeout=30,
-    )
-    raw = response.choices[0].message.content.strip()
-    return _clean_summary(raw)
+    for attempt in range(3):
+        try:
+            response = _groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": SUMMARY_PROMPT.format(question=question, results=results_text)}],
+                temperature=0,
+                max_tokens=150,
+                timeout=30,
+            )
+            raw = response.choices[0].message.content.strip()
+            return _clean_summary(raw)
+        except Exception as e:
+            if "429" in str(e) and attempt < 2:
+                import time as _t
+                print(f"[Groq] Rate limited on summary, retrying in {(attempt+1)*10}s...")
+                _t.sleep((attempt + 1) * 10)
+            else:
+                return "Summary unavailable — try again shortly." 
 
 
 # ---------------------------------------------------------------------------
