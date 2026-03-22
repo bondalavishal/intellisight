@@ -22,10 +22,7 @@ UNANSWERABLE_PATTERNS = [
         r'|seller.{0,30}review.{0,30}(over time|trend|month|improv)',
         "vw_seller_metrics has no time dimension — seller metrics are lifetime aggregates only."
     ),
-    (
-        r'categor.{0,30}cancel|cancel.{0,30}categor',
-        "vw_orders_metrics has no category column — cancellation cannot be broken down by category."
-    ),
+    # category cancellation now answerable via raw table joins
 ]
 
 # SQL overrides

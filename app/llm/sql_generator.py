@@ -9,16 +9,19 @@ _client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 SQL_PROMPT = """You are an expert Databricks SQL generator. Convert the question into a single SQL query.
 
 STRICT RULES:
-- Use ONLY the views provided in the DDL below
-- ONE view per query — NEVER join views
+- Use views by default. Use raw tables (olist_orders, olist_order_items, olist_products, product_category_translation, olist_order_reviews, olist_sellers) ONLY when views cannot answer
+- When using raw tables: always join olist_products to product_category_translation on product_category_name to get English category names
+- NEVER join views to each other
 - Never invent columns not listed in the DDL
 - Never use SUM(*) — use COUNT(*) for row counts
 - Never use aggregates in WHERE — use HAVING
 - Always include LIMIT
 - Never use spaces in aliases — underscores only
 - For cancellations from vw_orders_metrics: SUM(CASE WHEN order_status = 'canceled' THEN 1 ELSE 0 END)
+- For category-level cancellations: join olist_orders + olist_order_items + olist_products + product_category_translation
+- For freight analysis by category: join olist_order_items + olist_products + product_category_translation
 - For year comparisons: use vw_monthly_revenue GROUP BY year
-- If the question cannot be answered from available views:
+- If the question cannot be answered from available data:
   SELECT 'This question cannot be answered from the available data.' AS message LIMIT 1
 
 Question: {question}

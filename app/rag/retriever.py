@@ -27,7 +27,7 @@ def _get_collection():
     return _collection
 
 
-def retrieve(question: str, top_k: int = 5) -> str:
+def retrieve(question: str, top_k: int = 8) -> str:
     """
     Returns the top_k most relevant RAG chunks as a formatted string
     ready to inject into the SQL prompt.
@@ -83,5 +83,5 @@ CREATE VIEW vw_seller_metrics AS SELECT
     total_orders INT, total_revenue DECIMAL, avg_order_value DECIMAL,
     unique_products INT, avg_review_score DECIMAL, total_reviews INT FROM ...;
 
-RULES: ONE view per query. NEVER join views. NEVER invent columns. Always LIMIT.
+RULES: Use views by default. Use raw tables only when views cannot answer. NEVER join views to each other. NEVER invent columns. Always LIMIT.
 """
