@@ -445,3 +445,161 @@ Pattern for unanswerable:
 ```sql
 SELECT 'This question cannot be answered from the available data.' AS message LIMIT 1
 ```
+
+### PATTERN 26 — Late delivery % by state (raw tables required)
+Question: "What percentage of orders in each state were delivered late?"
+```sql
+SELECT c.customer_state,
+    COUNT(*) AS total_delivered,
+    SUM(CASE WHEN o.order_delivered_customer_date > o.order_estimated_delivery_date THEN 1 ELSE 0 END) AS late_count,
+    ROUND(SUM(CASE WHEN o.order_delivered_customer_date > o.order_estimated_delivery_date THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS late_pct
+FROM olist_orders o
+JOIN olist_customers c ON o.customer_id = c.customer_id
+WHERE o.order_status = 'delivered'
+  AND o.order_delivered_customer_date IS NOT NULL
+  AND o.order_estimated_delivery_date IS NOT NULL
+GROUP BY c.customer_state
+ORDER BY late_pct DESC
+LIMIT 30
+```
+
+### PATTERN 27 — Late deliveries by product category (raw tables required)
+Question: "Which product categories have the most late deliveries?"
+```sql
+SELECT t.product_category_name_english AS category,
+    COUNT(*) AS total_orders,
+    SUM(CASE WHEN o.order_delivered_customer_date > o.order_estimated_delivery_date THEN 1 ELSE 0 END) AS late_count,
+    ROUND(SUM(CASE WHEN o.order_delivered_customer_date > o.order_estimated_delivery_date THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS late_pct
+FROM olist_orders o
+JOIN olist_order_items i ON o.order_id = i.order_id
+JOIN olist_products p ON i.product_id = p.product_id
+JOIN product_category_translation t ON p.product_category_name = t.product_category_name
+WHERE o.order_status = 'delivered'
+  AND o.order_delivered_customer_date IS NOT NULL
+  AND o.order_estimated_delivery_date IS NOT NULL
+GROUP BY t.product_category_name_english
+HAVING COUNT(*) > 100
+ORDER BY late_pct DESC
+LIMIT 15
+```
+
+### PATTERN 28 — Late delivery rate by seller (raw tables required)
+Question: "Which sellers have the highest late delivery rates?"
+```sql
+SELECT i.seller_id,
+    COUNT(*) AS total_delivered,
+    SUM(CASE WHEN o.order_delivered_customer_date > o.order_estimated_delivery_date THEN 1 ELSE 0 END) AS late_count,
+    ROUND(SUM(CASE WHEN o.order_delivered_customer_date > o.order_estimated_delivery_date THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS late_pct
+FROM olist_orders o
+JOIN olist_order_items i ON o.order_id = i.order_id
+WHERE o.order_status = 'delivered'
+  AND o.order_delivered_customer_date IS NOT NULL
+  AND o.order_estimated_delivery_date IS NOT NULL
+GROUP BY i.seller_id
+HAVING COUNT(*) > 30
+ORDER BY late_pct DESC
+LIMIT 15
+```
+
+### PATTERN 29 — Average days late for late deliveries (raw tables required)
+Question: "How much later on average were late deliveries vs estimated date?"
+```sql
+SELECT
+    ROUND(AVG(DATEDIFF(o.order_delivered_customer_date, o.order_estimated_delivery_date)), 1) AS avg_days_late,
+    MAX(DATEDIFF(o.order_delivered_customer_date, o.order_estimated_delivery_date)) AS max_days_late,
+    COUNT(*) AS late_orders
+FROM olist_orders o
+WHERE o.order_status = 'delivered'
+  AND o.order_delivered_customer_date > o.order_estimated_delivery_date
+  AND o.order_delivered_customer_date IS NOT NULL
+  AND o.order_estimated_delivery_date IS NOT NULL
+LIMIT 1
+```
+
+### PATTERN 30 — Late delivery rate by month (raw tables required)
+Question: "Which months had the highest late delivery rates?"
+```sql
+SELECT YEAR(o.order_purchase_timestamp) AS year,
+    MONTH(o.order_purchase_timestamp) AS month,
+    DATE_FORMAT(o.order_purchase_timestamp, 'yyyy-MM') AS year_month,
+    COUNT(*) AS total_delivered,
+    SUM(CASE WHEN o.order_delivered_customer_date > o.order_estimated_delivery_date THEN 1 ELSE 0 END) AS late_count,
+    ROUND(SUM(CASE WHEN o.order_delivered_customer_date > o.order_estimated_delivery_date THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS late_pct
+FROM olist_orders o
+WHERE o.order_status = 'delivered'
+  AND o.order_delivered_customer_date IS NOT NULL
+  AND o.order_estimated_delivery_date IS NOT NULL
+GROUP BY YEAR(o.order_purchase_timestamp), MONTH(o.order_purchase_timestamp), DATE_FORMAT(o.order_purchase_timestamp, 'yyyy-MM')
+ORDER BY late_pct DESC
+LIMIT 12
+```
+
+### PATTERN 31 — Payment method distribution (raw tables required)
+Question: "What are the most common payment methods used?"
+```sql
+SELECT payment_type,
+    COUNT(*) AS order_count,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS pct_of_orders,
+    ROUND(AVG(payment_value), 2) AS avg_payment_value
+FROM olist_order_payments
+GROUP BY payment_type
+ORDER BY order_count DESC
+LIMIT 10
+```
+
+### PATTERN 32 — Average payment installments per order (raw tables required)
+Question: "What is the average number of payment installments per order?"
+```sql
+SELECT payment_type,
+    ROUND(AVG(payment_installments), 1) AS avg_installments,
+    MAX(payment_installments) AS max_installments,
+    COUNT(*) AS order_count
+FROM olist_order_payments
+WHERE payment_installments > 0
+GROUP BY payment_type
+ORDER BY avg_installments DESC
+LIMIT 10
+```
+
+### PATTERN 33 — Payment method by average order value (raw tables required)
+Question: "Which payment methods have the highest average order value?"
+```sql
+SELECT payment_type,
+    ROUND(AVG(payment_value), 2) AS avg_order_value,
+    ROUND(SUM(payment_value), 2) AS total_value,
+    COUNT(*) AS order_count
+FROM olist_order_payments
+GROUP BY payment_type
+ORDER BY avg_order_value DESC
+LIMIT 10
+```
+
+### PATTERN 34 — Credit card vs boleto comparison (raw tables required)
+Question: "What percentage of orders used credit card vs boleto?"
+```sql
+SELECT payment_type,
+    COUNT(*) AS order_count,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS pct_of_orders,
+    ROUND(SUM(payment_value), 2) AS total_value
+FROM olist_order_payments
+WHERE payment_type IN ('credit_card', 'boleto')
+GROUP BY payment_type
+ORDER BY order_count DESC
+LIMIT 2
+```
+
+### PATTERN 35 — Payment preference by state (raw tables required)
+Question: "Which states prefer boleto as payment method?"
+```sql
+SELECT c.customer_state,
+    SUM(CASE WHEN p.payment_type = 'boleto' THEN 1 ELSE 0 END) AS boleto_orders,
+    COUNT(*) AS total_orders,
+    ROUND(SUM(CASE WHEN p.payment_type = 'boleto' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS boleto_pct
+FROM olist_order_payments p
+JOIN olist_orders o ON p.order_id = o.order_id
+JOIN olist_customers c ON o.customer_id = c.customer_id
+GROUP BY c.customer_state
+HAVING COUNT(*) > 100
+ORDER BY boleto_pct DESC
+LIMIT 15
+```
