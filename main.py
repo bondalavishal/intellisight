@@ -273,6 +273,16 @@ if __name__ == "__main__":
     t = threading.Thread(target=_run_health_server, daemon=True)
     t.start()
     print(f"Health check running on port {os.getenv('FLASK_PORT', 3000)}")
-    handler = SocketModeHandler(app, os.getenv("SLACK_APP_TOKEN"))
-    handler.start()
+    import time as _time
+    while True:
+        try:
+            handler = SocketModeHandler(app, os.getenv("SLACK_APP_TOKEN"))
+            handler.connect()
+            print("InsightBot connected to Slack.")
+            while handler.client.is_connected():
+                _time.sleep(10)
+            print("Socket disconnected — reconnecting...")
+        except Exception as e:
+            print(f"Socket error: {e} — retrying in 5s...")
+            _time.sleep(5)
 
