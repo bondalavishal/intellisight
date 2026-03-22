@@ -603,3 +603,800 @@ HAVING COUNT(*) > 100
 ORDER BY boleto_pct DESC
 LIMIT 15
 ```
+
+### PATTERN 36 — Order lifecycle funnel (how many orders reach each status)
+Question: "How many orders are at each stage of the order lifecycle?"
+```sql
+SELECT order_status,
+    COUNT(*) AS order_count,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS pct_of_total
+FROM olist_orders
+GROUP BY order_status
+ORDER BY order_count DESC
+LIMIT 10
+```
+
+### PATTERN 37 — Average time from order to shipment (raw tables required)
+Question: "What is the average time between order placement and shipment?"
+```sql
+SELECT
+    ROUND(AVG(DATEDIFF(order_delivered_carrier_date, order_purchase_timestamp)), 1) AS avg_days_to_ship,
+    MIN(DATEDIFF(order_delivered_carrier_date, order_purchase_timestamp)) AS min_days,
+    MAX(DATEDIFF(order_delivered_carrier_date, order_purchase_timestamp)) AS max_days,
+    COUNT(*) AS total_orders
+FROM olist_orders
+WHERE order_delivered_carrier_date IS NOT NULL
+  AND order_purchase_timestamp IS NOT NULL
+  AND order_status = 'delivered'
+LIMIT 1
+```
+
+### PATTERN 38 — Average time from order to approval (raw tables required)
+Question: "How long does it take on average from order placement to approval?"
+```sql
+SELECT
+    ROUND(AVG(DATEDIFF(order_approved_at, order_purchase_timestamp)), 1) AS avg_days_to_approve,
+    ROUND(AVG(DATEDIFF(order_approved_at, order_purchase_timestamp) * 24), 1) AS avg_hours_to_approve,
+    COUNT(*) AS total_orders
+FROM olist_orders
+WHERE order_approved_at IS NOT NULL
+  AND order_purchase_timestamp IS NOT NULL
+LIMIT 1
+```
+
+### PATTERN 39 — Orders by day of week (raw tables required)
+Question: "Which day of the week has the most orders placed?"
+```sql
+SELECT DAYOFWEEK(order_purchase_timestamp) AS day_of_week_num,
+    CASE DAYOFWEEK(order_purchase_timestamp)
+        WHEN 1 THEN 'Sunday'
+        WHEN 2 THEN 'Monday'
+        WHEN 3 THEN 'Tuesday'
+        WHEN 4 THEN 'Wednesday'
+        WHEN 5 THEN 'Thursday'
+        WHEN 6 THEN 'Friday'
+        WHEN 7 THEN 'Saturday'
+    END AS day_name,
+    COUNT(*) AS order_count,
+    ROUND(AVG(i.price), 2) AS avg_order_value
+FROM olist_orders o
+JOIN olist_order_items i ON o.order_id = i.order_id
+GROUP BY DAYOFWEEK(order_purchase_timestamp)
+ORDER BY order_count DESC
+LIMIT 7
+```
+
+### PATTERN 40 — Orders by hour of day (raw tables required)
+Question: "Which hour of the day has the most orders placed?"
+```sql
+SELECT HOUR(order_purchase_timestamp) AS hour_of_day,
+    COUNT(*) AS order_count
+FROM olist_orders
+GROUP BY HOUR(order_purchase_timestamp)
+ORDER BY order_count DESC
+LIMIT 24
+```
+
+### PATTERN 41 — Weekend vs weekday orders (raw tables required)
+Question: "How many orders were placed on weekends vs weekdays?"
+```sql
+SELECT
+    CASE WHEN DAYOFWEEK(order_purchase_timestamp) IN (1, 7) THEN 'Weekend' ELSE 'Weekday' END AS day_type,
+    COUNT(*) AS order_count,
+    ROUND(AVG(i.price), 2) AS avg_order_value,
+    ROUND(SUM(i.price), 2) AS total_revenue
+FROM olist_orders o
+JOIN olist_order_items i ON o.order_id = i.order_id
+GROUP BY day_type
+ORDER BY order_count DESC
+LIMIT 2
+```
+
+### PATTERN 42 — Repeat product purchases (how many products ordered more than once)
+Question: "Which products have been ordered the most times?"
+```sql
+SELECT p.product_id,
+    COALESCE(t.product_category_name_english, p.product_category_name, 'unknown') AS category,
+    COUNT(DISTINCT i.order_id) AS total_orders,
+    ROUND(SUM(i.price), 2) AS total_revenue,
+    ROUND(AVG(i.price), 2) AS avg_price
+FROM olist_order_items i
+JOIN olist_products p ON i.product_id = p.product_id
+LEFT JOIN product_category_translation t ON p.product_category_name = t.product_category_name
+GROUP BY p.product_id, category
+ORDER BY total_orders DESC
+LIMIT 15
+```
+
+### PATTERN 43 — Category revenue share (% of total revenue per category)
+Question: "What is each product category's share of total revenue?"
+```sql
+WITH category_rev AS (
+    SELECT t.product_category_name_english AS category,
+        ROUND(SUM(i.price), 2) AS category_revenue
+    FROM olist_order_items i
+    JOIN olist_products p ON i.product_id = p.product_id
+    JOIN product_category_translation t ON p.product_category_name = t.product_category_name
+    GROUP BY t.product_category_name_english
+),
+total AS (SELECT SUM(category_revenue) AS grand_total FROM category_rev)
+SELECT cr.category,
+    cr.category_revenue,
+    ROUND(cr.category_revenue * 100.0 / t.grand_total, 2) AS revenue_share_pct
+FROM category_rev cr
+CROSS JOIN total t
+ORDER BY cr.category_revenue DESC
+LIMIT 20
+```
+
+### PATTERN 44 — Category order count share (% of total orders per category)
+Question: "What percentage of all orders does each category represent?"
+```sql
+WITH cat_orders AS (
+    SELECT t.product_category_name_english AS category,
+        COUNT(DISTINCT i.order_id) AS cat_order_count
+    FROM olist_order_items i
+    JOIN olist_products p ON i.product_id = p.product_id
+    JOIN product_category_translation t ON p.product_category_name = t.product_category_name
+    GROUP BY t.product_category_name_english
+),
+total AS (SELECT SUM(cat_order_count) AS grand_total FROM cat_orders)
+SELECT co.category,
+    co.cat_order_count,
+    ROUND(co.cat_order_count * 100.0 / t.grand_total, 2) AS order_share_pct
+FROM cat_orders co
+CROSS JOIN total t
+ORDER BY co.cat_order_count DESC
+LIMIT 20
+```
+
+### PATTERN 45 — Seller geographic distribution
+Question: "How many sellers are in each state?"
+```sql
+SELECT seller_state,
+    COUNT(DISTINCT seller_id) AS seller_count,
+    ROUND(COUNT(DISTINCT seller_id) * 100.0 / SUM(COUNT(DISTINCT seller_id)) OVER (), 2) AS pct_of_sellers
+FROM olist_sellers
+GROUP BY seller_state
+ORDER BY seller_count DESC
+LIMIT 27
+```
+
+### PATTERN 46 — Customer geographic distribution
+Question: "How many customers are in each state?"
+```sql
+SELECT customer_state,
+    COUNT(DISTINCT customer_id) AS customer_count,
+    ROUND(COUNT(DISTINCT customer_id) * 100.0 / SUM(COUNT(DISTINCT customer_id)) OVER (), 2) AS pct_of_customers
+FROM olist_customers
+GROUP BY customer_state
+ORDER BY customer_count DESC
+LIMIT 27
+```
+
+### PATTERN 47 — Revenue by customer state (use view)
+Question: "Which states generate the most revenue?"
+```sql
+SELECT customer_state,
+    ROUND(SUM(order_revenue), 2) AS total_revenue,
+    COUNT(DISTINCT order_id) AS total_orders,
+    ROUND(AVG(order_revenue), 2) AS avg_order_value
+FROM vw_orders_metrics
+WHERE order_status = 'delivered'
+GROUP BY customer_state
+ORDER BY total_revenue DESC
+LIMIT 15
+```
+
+### PATTERN 48 — Seller vs customer state mismatch (cross-state orders, raw tables)
+Question: "How many orders are cross-state — seller and customer in different states?"
+```sql
+SELECT
+    SUM(CASE WHEN s.seller_state != c.customer_state THEN 1 ELSE 0 END) AS cross_state_orders,
+    SUM(CASE WHEN s.seller_state = c.customer_state THEN 1 ELSE 0 END) AS same_state_orders,
+    COUNT(*) AS total_orders,
+    ROUND(SUM(CASE WHEN s.seller_state != c.customer_state THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS cross_state_pct
+FROM olist_orders o
+JOIN olist_order_items i ON o.order_id = i.order_id
+JOIN olist_sellers s ON i.seller_id = s.seller_id
+JOIN olist_customers c ON o.customer_id = c.customer_id
+WHERE o.order_status = 'delivered'
+LIMIT 1
+```
+
+### PATTERN 49 — Review score by state (raw tables required)
+Question: "What is the average review score per state?"
+```sql
+SELECT c.customer_state,
+    ROUND(AVG(r.review_score), 2) AS avg_review_score,
+    COUNT(r.review_id) AS review_count
+FROM olist_order_reviews r
+JOIN olist_orders o ON r.order_id = o.order_id
+JOIN olist_customers c ON o.customer_id = c.customer_id
+GROUP BY c.customer_state
+HAVING COUNT(r.review_id) > 50
+ORDER BY avg_review_score DESC
+LIMIT 27
+```
+
+### PATTERN 50 — 1-star vs 5-star review counts by category (raw tables required)
+Question: "Which categories have the most 1-star reviews? Which have the most 5-star?"
+```sql
+SELECT t.product_category_name_english AS category,
+    SUM(CASE WHEN r.review_score = 1 THEN 1 ELSE 0 END) AS one_star,
+    SUM(CASE WHEN r.review_score = 5 THEN 1 ELSE 0 END) AS five_star,
+    COUNT(*) AS total_reviews,
+    ROUND(AVG(r.review_score), 2) AS avg_score,
+    ROUND(SUM(CASE WHEN r.review_score = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS one_star_pct
+FROM olist_order_reviews r
+JOIN olist_orders o ON r.order_id = o.order_id
+JOIN olist_order_items i ON o.order_id = i.order_id
+JOIN olist_products p ON i.product_id = p.product_id
+JOIN product_category_translation t ON p.product_category_name = t.product_category_name
+GROUP BY t.product_category_name_english
+HAVING COUNT(*) > 100
+ORDER BY one_star DESC
+LIMIT 15
+```
+
+### PATTERN 51 — Review score improving or declining categories YoY (raw tables required)
+Question: "Which product categories have improving review scores from 2017 to 2018?"
+```sql
+WITH yearly AS (
+    SELECT t.product_category_name_english AS category,
+        YEAR(r.review_creation_date) AS yr,
+        ROUND(AVG(r.review_score), 3) AS avg_score,
+        COUNT(*) AS review_count
+    FROM olist_order_reviews r
+    JOIN olist_orders o ON r.order_id = o.order_id
+    JOIN olist_order_items i ON o.order_id = i.order_id
+    JOIN olist_products p ON i.product_id = p.product_id
+    JOIN product_category_translation t ON p.product_category_name = t.product_category_name
+    WHERE YEAR(r.review_creation_date) IN (2017, 2018)
+    GROUP BY t.product_category_name_english, YEAR(r.review_creation_date)
+    HAVING COUNT(*) > 30
+)
+SELECT y17.category,
+    y17.avg_score AS score_2017,
+    y18.avg_score AS score_2018,
+    ROUND(y18.avg_score - y17.avg_score, 3) AS score_change
+FROM yearly y17
+JOIN yearly y18 ON y17.category = y18.category AND y17.yr = 2017 AND y18.yr = 2018
+ORDER BY score_change DESC
+LIMIT 15
+```
+
+### PATTERN 52 — Seller improving review scores YoY (raw tables required)
+Question: "Which sellers improved their review scores from 2017 to 2018?"
+```sql
+WITH yearly AS (
+    SELECT i.seller_id,
+        YEAR(r.review_creation_date) AS yr,
+        ROUND(AVG(r.review_score), 3) AS avg_score,
+        COUNT(*) AS review_count
+    FROM olist_order_reviews r
+    JOIN olist_orders o ON r.order_id = o.order_id
+    JOIN olist_order_items i ON o.order_id = i.order_id
+    WHERE YEAR(r.review_creation_date) IN (2017, 2018)
+    GROUP BY i.seller_id, YEAR(r.review_creation_date)
+    HAVING COUNT(*) > 20
+)
+SELECT y17.seller_id,
+    y17.avg_score AS score_2017,
+    y18.avg_score AS score_2018,
+    ROUND(y18.avg_score - y17.avg_score, 3) AS improvement
+FROM yearly y17
+JOIN yearly y18 ON y17.seller_id = y18.seller_id AND y17.yr = 2017 AND y18.yr = 2018
+WHERE y18.avg_score > y17.avg_score
+ORDER BY improvement DESC
+LIMIT 15
+```
+
+### PATTERN 53 — Category growth YoY (order volume 2017 vs 2018, raw tables)
+Question: "Which categories grew the most in order volume from 2017 to 2018?"
+```sql
+WITH yearly AS (
+    SELECT t.product_category_name_english AS category,
+        YEAR(o.order_purchase_timestamp) AS yr,
+        COUNT(DISTINCT o.order_id) AS order_count
+    FROM olist_orders o
+    JOIN olist_order_items i ON o.order_id = i.order_id
+    JOIN olist_products p ON i.product_id = p.product_id
+    JOIN product_category_translation t ON p.product_category_name = t.product_category_name
+    WHERE YEAR(o.order_purchase_timestamp) IN (2017, 2018)
+    GROUP BY t.product_category_name_english, YEAR(o.order_purchase_timestamp)
+    HAVING COUNT(DISTINCT o.order_id) > 50
+)
+SELECT y17.category,
+    y17.order_count AS orders_2017,
+    y18.order_count AS orders_2018,
+    ROUND((y18.order_count - y17.order_count) * 100.0 / y17.order_count, 1) AS growth_pct
+FROM yearly y17
+JOIN yearly y18 ON y17.category = y18.category AND y17.yr = 2017 AND y18.yr = 2018
+ORDER BY growth_pct DESC
+LIMIT 15
+```
+
+### PATTERN 54 — Revenue per product weight (value density by category, raw tables)
+Question: "Which categories have the highest revenue per gram of product weight?"
+```sql
+SELECT t.product_category_name_english AS category,
+    ROUND(SUM(i.price) / NULLIF(SUM(p.product_weight_g), 0), 4) AS revenue_per_gram,
+    ROUND(AVG(p.product_weight_g), 0) AS avg_weight_g,
+    ROUND(SUM(i.price), 2) AS total_revenue,
+    COUNT(*) AS order_count
+FROM olist_order_items i
+JOIN olist_products p ON i.product_id = p.product_id
+JOIN product_category_translation t ON p.product_category_name = t.product_category_name
+WHERE p.product_weight_g > 0
+GROUP BY t.product_category_name_english
+HAVING COUNT(*) > 100
+ORDER BY revenue_per_gram DESC
+LIMIT 15
+```
+
+### PATTERN 55 — Product size analysis (volume by category, raw tables)
+Question: "Which categories have the largest average product dimensions?"
+```sql
+SELECT t.product_category_name_english AS category,
+    ROUND(AVG(p.product_weight_g), 0) AS avg_weight_g,
+    ROUND(AVG(p.product_length_cm * p.product_height_cm * p.product_width_cm), 0) AS avg_volume_cm3,
+    ROUND(AVG(p.product_length_cm), 1) AS avg_length_cm,
+    COUNT(*) AS product_count
+FROM olist_products p
+JOIN product_category_translation t ON p.product_category_name = t.product_category_name
+WHERE p.product_weight_g > 0
+  AND p.product_length_cm > 0
+GROUP BY t.product_category_name_english
+ORDER BY avg_volume_cm3 DESC
+LIMIT 15
+```
+
+### PATTERN 56 — Seller market share within a category (raw tables)
+Question: "What is the market share of top sellers within a specific category?"
+```sql
+WITH cat_total AS (
+    SELECT SUM(i.price) AS total_revenue
+    FROM olist_order_items i
+    JOIN olist_products p ON i.product_id = p.product_id
+    JOIN product_category_translation t ON p.product_category_name = t.product_category_name
+    WHERE t.product_category_name_english = 'health_beauty'
+)
+SELECT i.seller_id,
+    ROUND(SUM(i.price), 2) AS seller_revenue,
+    ROUND(SUM(i.price) * 100.0 / ct.total_revenue, 2) AS market_share_pct,
+    COUNT(DISTINCT i.order_id) AS order_count
+FROM olist_order_items i
+JOIN olist_products p ON i.product_id = p.product_id
+JOIN product_category_translation t ON p.product_category_name = t.product_category_name
+CROSS JOIN cat_total ct
+WHERE t.product_category_name_english = 'health_beauty'
+GROUP BY i.seller_id, ct.total_revenue
+ORDER BY seller_revenue DESC
+LIMIT 10
+```
+
+### PATTERN 57 — Orders with multiple items vs single item (raw tables)
+Question: "What percentage of orders contain more than one item?"
+```sql
+WITH order_sizes AS (
+    SELECT order_id, COUNT(*) AS item_count
+    FROM olist_order_items
+    GROUP BY order_id
+)
+SELECT
+    SUM(CASE WHEN item_count = 1 THEN 1 ELSE 0 END) AS single_item_orders,
+    SUM(CASE WHEN item_count > 1 THEN 1 ELSE 0 END) AS multi_item_orders,
+    COUNT(*) AS total_orders,
+    ROUND(SUM(CASE WHEN item_count > 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS multi_item_pct,
+    ROUND(AVG(item_count), 2) AS avg_items_per_order
+FROM order_sizes
+LIMIT 1
+```
+
+### PATTERN 58 — High value orders analysis (raw tables)
+Question: "What are the characteristics of orders over R$500?"
+```sql
+SELECT
+    COUNT(*) AS high_value_orders,
+    ROUND(AVG(order_revenue), 2) AS avg_revenue,
+    ROUND(AVG(delivery_days), 1) AS avg_delivery_days,
+    ROUND(AVG(CASE WHEN order_status = 'canceled' THEN 1.0 ELSE 0.0 END) * 100, 2) AS cancel_rate_pct,
+    customer_state
+FROM vw_orders_metrics
+WHERE order_revenue > 500
+GROUP BY customer_state
+ORDER BY high_value_orders DESC
+LIMIT 10
+```
+
+### PATTERN 59 — Correlation between delivery speed and review score (view)
+Question: "Do faster deliveries get better review scores?"
+```sql
+SELECT
+    CASE
+        WHEN delivery_days <= 7 THEN 'Fast (≤7 days)'
+        WHEN delivery_days <= 14 THEN 'Normal (8-14 days)'
+        WHEN delivery_days <= 21 THEN 'Slow (15-21 days)'
+        ELSE 'Very Slow (>21 days)'
+    END AS delivery_bucket,
+    COUNT(*) AS order_count,
+    ROUND(AVG(delivery_days), 1) AS avg_days
+FROM vw_orders_metrics
+WHERE delivery_days IS NOT NULL
+  AND order_status = 'delivered'
+GROUP BY delivery_bucket
+ORDER BY MIN(delivery_days)
+LIMIT 10
+```
+
+### PATTERN 60 — Freight cost impact on order value (view)
+Question: "What percentage of total order value is freight on average?"
+```sql
+SELECT
+    ROUND(AVG(order_freight / NULLIF(order_total, 0)) * 100, 2) AS avg_freight_pct_of_total,
+    ROUND(AVG(order_freight), 2) AS avg_freight_value,
+    ROUND(AVG(order_revenue), 2) AS avg_item_value,
+    ROUND(AVG(order_total), 2) AS avg_total_value,
+    COUNT(*) AS total_orders
+FROM vw_orders_metrics
+WHERE order_status = 'delivered'
+  AND order_total > 0
+LIMIT 1
+```
+
+### PATTERN 61 — Top categories by average review score (view)
+Question: "Which product categories have the highest average review scores?"
+```sql
+SELECT category,
+    ROUND(avg_review_score, 2) AS avg_score,
+    SUM(total_orders) AS total_orders,
+    ROUND(SUM(total_revenue), 2) AS total_revenue
+FROM vw_product_metrics
+WHERE avg_review_score IS NOT NULL
+GROUP BY category, avg_review_score
+HAVING SUM(total_orders) > 100
+ORDER BY avg_review_score DESC
+LIMIT 15
+```
+
+### PATTERN 62 — Categories with high volume but low review (underperforming, view)
+Question: "Which high-volume categories have below average review scores?"
+```sql
+WITH avg_score AS (
+    SELECT AVG(avg_review_score) AS platform_avg FROM vw_product_metrics
+)
+SELECT p.category,
+    SUM(p.total_orders) AS total_orders,
+    ROUND(AVG(p.avg_review_score), 2) AS avg_score,
+    ROUND(a.platform_avg, 2) AS platform_avg
+FROM vw_product_metrics p
+CROSS JOIN avg_score a
+GROUP BY p.category, a.platform_avg
+HAVING SUM(p.total_orders) > 500
+   AND AVG(p.avg_review_score) < a.platform_avg
+ORDER BY total_orders DESC
+LIMIT 15
+```
+
+### PATTERN 63 — Monthly cancellation trend (view)
+Question: "How has the monthly cancellation rate trended over time?"
+```sql
+SELECT year_month, year, month,
+    total_orders,
+    canceled_orders,
+    ROUND(canceled_orders * 100.0 / NULLIF(total_orders, 0), 2) AS cancel_pct,
+    LAG(ROUND(canceled_orders * 100.0 / NULLIF(total_orders, 0), 2)) OVER (ORDER BY year, month) AS prev_cancel_pct
+FROM vw_monthly_revenue
+WHERE total_orders > 0
+ORDER BY year, month
+LIMIT 30
+```
+
+### PATTERN 64 — Quarterly revenue summary (view)
+Question: "What was revenue by quarter?"
+```sql
+SELECT year,
+    CEIL(month / 3.0) AS quarter,
+    CONCAT(year, '-Q', CAST(CEIL(month / 3.0) AS STRING)) AS quarter_label,
+    SUM(total_revenue) AS quarterly_revenue,
+    SUM(total_orders) AS quarterly_orders,
+    ROUND(AVG(avg_order_value), 2) AS avg_order_value
+FROM vw_monthly_revenue
+GROUP BY year, CEIL(month / 3.0)
+ORDER BY year, quarter
+LIMIT 12
+```
+
+### PATTERN 65 — Revenue acceleration (months where growth itself grew, view)
+Question: "Which months had revenue growth above the average growth rate?"
+```sql
+WITH monthly AS (
+    SELECT year_month, year, month, total_revenue,
+        LAG(total_revenue) OVER (ORDER BY year, month) AS prev_revenue
+    FROM vw_monthly_revenue
+),
+growth AS (
+    SELECT year_month, year, month, total_revenue, prev_revenue,
+        ROUND((total_revenue - prev_revenue) / NULLIF(prev_revenue, 0) * 100, 2) AS growth_pct
+    FROM monthly
+    WHERE prev_revenue IS NOT NULL AND prev_revenue > 0
+),
+avg_growth AS (
+    SELECT AVG(growth_pct) AS avg_pct FROM growth
+)
+SELECT g.year_month, g.total_revenue, g.growth_pct, a.avg_pct AS avg_growth_pct
+FROM growth g
+CROSS JOIN avg_growth a
+WHERE g.growth_pct > a.avg_pct
+ORDER BY g.growth_pct DESC
+LIMIT 12
+```
+
+### PATTERN 66 — Seller count by revenue tier (view)
+Question: "How many sellers fall into each revenue tier?"
+```sql
+SELECT
+    CASE
+        WHEN total_revenue >= 100000 THEN 'Tier 1 — R$100k+'
+        WHEN total_revenue >= 50000  THEN 'Tier 2 — R$50k-100k'
+        WHEN total_revenue >= 10000  THEN 'Tier 3 — R$10k-50k'
+        WHEN total_revenue >= 1000   THEN 'Tier 4 — R$1k-10k'
+        ELSE 'Tier 5 — Under R$1k'
+    END AS revenue_tier,
+    COUNT(*) AS seller_count,
+    ROUND(SUM(total_revenue), 2) AS tier_revenue
+FROM vw_seller_metrics
+GROUP BY revenue_tier
+ORDER BY MIN(total_revenue) DESC
+LIMIT 10
+```
+
+### PATTERN 67 — Sellers with high orders but low revenue (low AOV sellers, view)
+Question: "Which sellers have many orders but low average order value?"
+```sql
+WITH avg_aov AS (SELECT AVG(avg_order_value) AS platform_avg FROM vw_seller_metrics)
+SELECT s.seller_id, s.seller_state,
+    s.total_orders,
+    ROUND(s.avg_order_value, 2) AS avg_order_value,
+    ROUND(s.total_revenue, 2) AS total_revenue,
+    ROUND(a.platform_avg, 2) AS platform_avg_aov
+FROM vw_seller_metrics s
+CROSS JOIN avg_aov a
+WHERE s.total_orders > 50
+  AND s.avg_order_value < a.platform_avg * 0.5
+ORDER BY s.total_orders DESC
+LIMIT 15
+```
+
+### PATTERN 68 — Top N sellers responsible for X% of revenue (Pareto, view)
+Question: "How many sellers are responsible for 80% of total revenue?"
+```sql
+WITH ranked AS (
+    SELECT seller_id, total_revenue,
+        SUM(total_revenue) OVER (ORDER BY total_revenue DESC) AS cumulative_revenue,
+        SUM(total_revenue) OVER () AS grand_total
+    FROM vw_seller_metrics
+)
+SELECT COUNT(*) AS sellers_for_80pct,
+    ROUND(MAX(cumulative_revenue), 2) AS cumulative_rev,
+    ROUND(MAX(grand_total), 2) AS total_rev
+FROM ranked
+WHERE cumulative_revenue <= grand_total * 0.8
+LIMIT 1
+```
+
+### PATTERN 69 — New customers per month (unique customers first order, raw tables)
+Question: "How many new customers placed their first order each month?"
+```sql
+WITH first_orders AS (
+    SELECT customer_id,
+        MIN(order_purchase_timestamp) AS first_order_date
+    FROM olist_orders
+    WHERE order_status != 'canceled'
+    GROUP BY customer_id
+)
+SELECT DATE_FORMAT(first_order_date, 'yyyy-MM') AS year_month,
+    COUNT(*) AS new_customers
+FROM first_orders
+GROUP BY DATE_FORMAT(first_order_date, 'yyyy-MM')
+ORDER BY year_month
+LIMIT 30
+```
+
+### PATTERN 70 — Average review score by payment method (raw tables)
+Question: "Do customers who pay with credit card give higher review scores than boleto?"
+```sql
+SELECT p.payment_type,
+    ROUND(AVG(r.review_score), 2) AS avg_review_score,
+    COUNT(*) AS review_count,
+    ROUND(AVG(p.payment_value), 2) AS avg_payment_value
+FROM olist_order_payments p
+JOIN olist_order_reviews r ON p.order_id = r.order_id
+GROUP BY p.payment_type
+ORDER BY avg_review_score DESC
+LIMIT 10
+```
+
+### PATTERN 71 — High installment orders analysis (raw tables)
+Question: "What is the average review score for orders with more than 6 installments?"
+```sql
+SELECT
+    CASE WHEN p.payment_installments > 6 THEN 'High (>6)' ELSE 'Low (1-6)' END AS installment_group,
+    ROUND(AVG(r.review_score), 2) AS avg_review_score,
+    ROUND(AVG(p.payment_value), 2) AS avg_order_value,
+    COUNT(*) AS order_count
+FROM olist_order_payments p
+JOIN olist_order_reviews r ON p.order_id = r.order_id
+WHERE p.payment_type = 'credit_card'
+GROUP BY installment_group
+ORDER BY installment_group
+LIMIT 2
+```
+
+### PATTERN 72 — Delivery time by product weight bucket (raw tables)
+Question: "Do heavier products take longer to deliver?"
+```sql
+WITH order_weights AS (
+    SELECT o.order_id,
+        DATEDIFF(o.order_delivered_customer_date, o.order_purchase_timestamp) AS delivery_days,
+        AVG(p.product_weight_g) AS avg_weight
+    FROM olist_orders o
+    JOIN olist_order_items i ON o.order_id = i.order_id
+    JOIN olist_products p ON i.product_id = p.product_id
+    WHERE o.order_status = 'delivered'
+      AND o.order_delivered_customer_date IS NOT NULL
+      AND p.product_weight_g > 0
+    GROUP BY o.order_id, o.order_delivered_customer_date, o.order_purchase_timestamp
+)
+SELECT
+    CASE
+        WHEN avg_weight < 500   THEN 'Light (<500g)'
+        WHEN avg_weight < 2000  THEN 'Medium (500g-2kg)'
+        WHEN avg_weight < 5000  THEN 'Heavy (2kg-5kg)'
+        ELSE 'Very Heavy (>5kg)'
+    END AS weight_bucket,
+    ROUND(AVG(delivery_days), 1) AS avg_delivery_days,
+    COUNT(*) AS order_count
+FROM order_weights
+GROUP BY weight_bucket
+ORDER BY MIN(avg_weight)
+LIMIT 4
+```
+
+### PATTERN 73 — States with both high revenue and fast delivery (multi-metric, view)
+Question: "Which states have above average revenue AND above average delivery speed?"
+```sql
+WITH state_stats AS (
+    SELECT customer_state,
+        ROUND(SUM(order_revenue), 2) AS total_revenue,
+        ROUND(AVG(delivery_days), 1) AS avg_delivery_days,
+        COUNT(DISTINCT order_id) AS total_orders
+    FROM vw_orders_metrics
+    WHERE delivery_days IS NOT NULL AND order_status = 'delivered'
+    GROUP BY customer_state
+),
+avgs AS (
+    SELECT AVG(total_revenue) AS avg_rev, AVG(avg_delivery_days) AS avg_days
+    FROM state_stats
+)
+SELECT s.customer_state, s.total_revenue, s.avg_delivery_days, s.total_orders
+FROM state_stats s
+CROSS JOIN avgs a
+WHERE s.total_revenue > a.avg_rev
+  AND s.avg_delivery_days < a.avg_days
+ORDER BY s.total_revenue DESC
+LIMIT 10
+```
+
+### PATTERN 74 — Product categories ordered with multiple sellers (raw tables)
+Question: "Which categories have the most unique sellers?"
+```sql
+SELECT t.product_category_name_english AS category,
+    COUNT(DISTINCT i.seller_id) AS unique_sellers,
+    COUNT(DISTINCT i.order_id) AS total_orders,
+    ROUND(SUM(i.price), 2) AS total_revenue
+FROM olist_order_items i
+JOIN olist_products p ON i.product_id = p.product_id
+JOIN product_category_translation t ON p.product_category_name = t.product_category_name
+GROUP BY t.product_category_name_english
+ORDER BY unique_sellers DESC
+LIMIT 15
+```
+
+### PATTERN 75 — Orders cancelled after approval (raw tables)
+Question: "How many orders were cancelled after being approved?"
+```sql
+SELECT
+    SUM(CASE WHEN order_approved_at IS NOT NULL AND order_status = 'canceled' THEN 1 ELSE 0 END) AS cancelled_after_approval,
+    SUM(CASE WHEN order_approved_at IS NULL AND order_status = 'canceled' THEN 1 ELSE 0 END) AS cancelled_before_approval,
+    COUNT(CASE WHEN order_status = 'canceled' THEN 1 END) AS total_cancelled
+FROM olist_orders
+LIMIT 1
+```
+
+### PATTERN 76 — Revenue concentration by top categories (Pareto, raw tables)
+Question: "What percentage of total revenue comes from the top 5 categories?"
+```sql
+WITH cat_rev AS (
+    SELECT t.product_category_name_english AS category,
+        ROUND(SUM(i.price), 2) AS revenue
+    FROM olist_order_items i
+    JOIN olist_products p ON i.product_id = p.product_id
+    JOIN product_category_translation t ON p.product_category_name = t.product_category_name
+    GROUP BY t.product_category_name_english
+    ORDER BY revenue DESC
+    LIMIT 5
+),
+total AS (
+    SELECT SUM(i.price) AS grand_total FROM olist_order_items i
+)
+SELECT SUM(cr.revenue) AS top5_revenue,
+    t.grand_total,
+    ROUND(SUM(cr.revenue) * 100.0 / t.grand_total, 2) AS top5_share_pct
+FROM cat_rev cr
+CROSS JOIN total t
+GROUP BY t.grand_total
+LIMIT 1
+```
+
+### PATTERN 77 — Average photos per product by category (raw tables)
+Question: "Which categories have products with the most photos?"
+```sql
+SELECT t.product_category_name_english AS category,
+    ROUND(AVG(p.product_photos_qty), 1) AS avg_photos,
+    COUNT(*) AS product_count
+FROM olist_products p
+JOIN product_category_translation t ON p.product_category_name = t.product_category_name
+WHERE p.product_photos_qty IS NOT NULL
+GROUP BY t.product_category_name_english
+ORDER BY avg_photos DESC
+LIMIT 15
+```
+
+### PATTERN 78 — Orders with no review (raw tables)
+Question: "What percentage of delivered orders did not receive a review?"
+```sql
+SELECT
+    COUNT(DISTINCT o.order_id) AS total_delivered,
+    COUNT(DISTINCT r.order_id) AS reviewed_orders,
+    COUNT(DISTINCT o.order_id) - COUNT(DISTINCT r.order_id) AS no_review_orders,
+    ROUND((COUNT(DISTINCT o.order_id) - COUNT(DISTINCT r.order_id)) * 100.0 / COUNT(DISTINCT o.order_id), 2) AS no_review_pct
+FROM olist_orders o
+LEFT JOIN olist_order_reviews r ON o.order_id = r.order_id
+WHERE o.order_status = 'delivered'
+LIMIT 1
+```
+
+### PATTERN 79 — Sellers selling in only one category vs multiple (raw tables)
+Question: "How many sellers sell in only one category vs multiple categories?"
+```sql
+WITH seller_cats AS (
+    SELECT i.seller_id,
+        COUNT(DISTINCT t.product_category_name_english) AS category_count
+    FROM olist_order_items i
+    JOIN olist_products p ON i.product_id = p.product_id
+    JOIN product_category_translation t ON p.product_category_name = t.product_category_name
+    GROUP BY i.seller_id
+)
+SELECT
+    SUM(CASE WHEN category_count = 1 THEN 1 ELSE 0 END) AS single_category_sellers,
+    SUM(CASE WHEN category_count > 1 THEN 1 ELSE 0 END) AS multi_category_sellers,
+    COUNT(*) AS total_sellers,
+    ROUND(AVG(category_count), 1) AS avg_categories_per_seller
+FROM seller_cats
+LIMIT 1
+```
+
+### PATTERN 80 — Unanswerable questions — return message, no SQL
+These questions cannot be answered from available data. Return the message pattern:
+- Customer lifetime value or repeat purchase rate (no customer history across orders)
+- Profit margins (no cost data, only revenue)
+- Inventory or stock levels (static dataset)
+- Marketing spend or ROI (no marketing data)
+- Real-time or future data
+- Competitor analysis (single platform)
+- Seller improvement trends over time (vw_seller_metrics has no time dimension — lifetime aggregates only)
+```sql
+SELECT 'This question cannot be answered from the available data.' AS message LIMIT 1
+```
