@@ -1,11 +1,11 @@
 import os
 import re
 import time
-from groq import Groq
+from cerebras.cloud.sdk import Cerebras
 
 from app.rag.retriever import retrieve
 
-_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+_client = Cerebras(api_key=os.getenv("CEREBRAS_API_KEY"))
 
 SQL_PROMPT = """You are an expert Databricks SQL generator. Convert the question into a single SQL query.
 
@@ -59,7 +59,7 @@ def generate_sql(question: str) -> str:
     for attempt in range(3):
         try:
             response = _client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="llama-3.3-70b",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
                 max_tokens=512,

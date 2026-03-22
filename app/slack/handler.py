@@ -1,7 +1,7 @@
 import re
 import time
 import os
-from groq import Groq
+from cerebras.cloud.sdk import Cerebras
 
 from app.llm.intent import classify_intent
 from app.llm.sql_generator import generate_sql
@@ -10,7 +10,7 @@ from app.sql.connector import run_query
 from app.eval.cache import get_cached, save_to_cache, cache_stats
 from app.eval.logger import log, get_stats
 
-_groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+_groq_client = Cerebras(api_key=os.getenv("CEREBRAS_API_KEY"))
 
 # ---------------------------------------------------------------------------
 # Pre-flight: unanswerable questions
@@ -244,7 +244,7 @@ def summarise_results(question: str, results: list[dict]) -> str:
     for attempt in range(3):
         try:
             response = _groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="llama-3.3-70b",
                 messages=[{"role": "user", "content": SUMMARY_PROMPT.format(question=question, results=results_text)}],
                 temperature=0,
                 max_tokens=150,
