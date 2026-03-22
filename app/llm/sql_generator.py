@@ -59,7 +59,7 @@ def generate_sql(question: str) -> str:
     for attempt in range(3):
         try:
             response = _client.chat.completions.create(
-                model="llama-3.3-70b",
+                model="llama3.3-70b",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
                 max_tokens=512,
