@@ -244,7 +244,7 @@ def summarise_results(question: str, results: list[dict]) -> str:
     for attempt in range(3):
         try:
             response = _groq_client.chat.completions.create(
-                model="llama3.3-70b",
+                model="llama3.1-8b",
                 messages=[{"role": "user", "content": SUMMARY_PROMPT.format(question=question, results=results_text)}],
                 temperature=0,
                 max_tokens=150,
