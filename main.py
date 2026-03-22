@@ -1,10 +1,15 @@
 import os
+import re
+import time
+import threading
+import concurrent.futures
+
 from dotenv import load_dotenv
+from flask import Flask as _Flask
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from app.llm.intent import classify_intent
-from app.llm.sql_generator import generate_sql
 from app.sql.guardrails import validate_sql, enforce_limit
 from app.sql.connector import run_query
 from app.slack.handler import (
@@ -13,115 +18,166 @@ from app.slack.handler import (
     _split_questions,
     detect_anomalies,
     summarise_results,
-    _clean_summary,
+    is_download_request,
+    results_to_csv_string,
     STATS_PATTERN,
+    DOWNLOAD_FOOTER,
     get_stats,
     cache_stats,
     get_cached,
     save_to_cache,
     log,
 )
-import time
-import re
+from app.eval.interaction_logger import (
+    get_user_info,
+    log_interaction,
+    mark_csv_downloaded,
+    csv_string_to_bytes,
+)
 
 load_dotenv()
 app = App(token=os.getenv("SLACK_BOT_TOKEN"))
 
+# ── In-memory store: last results per user ────────────────────────────────────
+# { user_id: { "results": [...], "csv_string": "...", "index_id": 123 } }
+_last_interaction: dict = {}
 
-# ---------------------------------------------------------------------------
-# Progress bar helper
-# ---------------------------------------------------------------------------
+
+# ── Progress bar ──────────────────────────────────────────────────────────────
 def _progress_bar(pct: int, label: str) -> str:
     filled = int(pct / 10)
-    empty  = 10 - filled
-    bar    = "▓" * filled + "░" * empty
+    bar    = "▓" * filled + "░" * (10 - filled)
     return f"⏳ *InsightBot is thinking...*\n`{bar}` {pct}% — {label}"
 
 
-# ---------------------------------------------------------------------------
-# Single question pipeline with live progress updates
-# ---------------------------------------------------------------------------
-def _answer_with_progress(client, channel: str, ts: str, question: str, idx: int = None) -> tuple[str, str, str]:
+# ── Single question pipeline ──────────────────────────────────────────────────
+def _answer_with_progress(
+    client, channel: str, ts: str, question: str, idx: int = None
+) -> tuple[str, list, str, str]:
+    """
+    Returns: (reply, results, csv_string, status)
+    """
     prefix = f"*{idx}.* " if idx is not None else ""
     start  = time.time()
 
-    # Step 0 — Cache check (instant, no progress needed)
+    # Cache check — instant, no progress bar
     cached = get_cached(question)
     if cached:
         latency = round(time.time() - start, 2)
         log(question=question, sql=cached["sql"], rows_returned=0,
             latency_sec=latency, cached=True, status="cache_hit")
-        reply = (f"{prefix}{cached['answer']}\n"
-                 f"_💾 Cached answer (similarity: {cached['similarity']})_")
-        return reply, cached["sql"], "cache_hit"
+        # No similarity score shown to user
+        reply = f"{prefix}{cached['answer']}{DOWNLOAD_FOOTER}"
+        return reply, [], cached.get("csv_string", ""), "cache_hit"
 
-    # Step 1 — Unanswerable check
+    # Pre-flight unanswerable check
     reason = _check_unanswerable(question)
     if reason:
         latency = round(time.time() - start, 2)
-        log(question=question, latency_sec=latency, status="blocked", error=reason)
-        return f"{prefix}Sorry, that can't be answered: {reason}", "", "blocked"
+        log(question=question, latency_sec=latency,
+            status="blocked", error=reason)
+        return f"{prefix}Sorry, that can't be answered: {reason}", [], "", "blocked"
 
-    # Step 2 — Generate SQL (20%)
-    client.chat_update(channel=channel, ts=ts, text=_progress_bar(20, "Generating SQL"))
+    # Generate SQL (20%)
+    client.chat_update(channel=channel, ts=ts,
+                       text=_progress_bar(20, "Generating SQL"))
     sql = _generate_sql_with_overrides(question)
-    print(f"[InsightBot] Generated SQL: {sql}")
+    print(f"[InsightBot] SQL: {sql}")
 
-    # Step 3 — Guardrails (40%)
-    client.chat_update(channel=channel, ts=ts, text=_progress_bar(40, "Validating query"))
+    # Guardrails (40%)
+    client.chat_update(channel=channel, ts=ts,
+                       text=_progress_bar(40, "Validating query"))
     is_valid, reason = validate_sql(sql)
     if not is_valid:
-        print(f"[InsightBot] Blocked: {reason}")
         latency = round(time.time() - start, 2)
-        log(question=question, sql=sql, latency_sec=latency, status="fail", error=reason)
-        return f"{prefix}Couldn't generate a safe query — try rephrasing.", sql, "fail"
+        log(question=question, sql=sql,
+            latency_sec=latency, status="fail", error=reason)
+        return (f"{prefix}Couldn't generate a safe query — try rephrasing.",
+                [], "", "fail")
 
     sql = enforce_limit(sql)
 
-    # Step 4 — Execute on Databricks (60%)
-    client.chat_update(channel=channel, ts=ts, text=_progress_bar(60, "Querying Databricks"))
+    # Databricks execution (60%)
+    client.chat_update(channel=channel, ts=ts,
+                       text=_progress_bar(60, "Querying Databricks"))
     try:
         results = run_query(sql)
-        print(f"[InsightBot] Rows returned: {len(results)}")
+        print(f"[InsightBot] Rows: {len(results)}")
     except Exception as e:
-        print(f"[InsightBot] Databricks error: {e}")
         latency = round(time.time() - start, 2)
-        log(question=question, sql=sql, latency_sec=latency, status="fail", error=str(e))
-        return f"{prefix}Query error — try rephrasing.", sql, "fail"
+        log(question=question, sql=sql,
+            latency_sec=latency, status="fail", error=str(e))
+        return f"{prefix}Query error — try rephrasing.", [], "", "fail"
 
-    # Step 5 — Anomaly detection (80%)
-    client.chat_update(channel=channel, ts=ts, text=_progress_bar(80, "Detecting anomalies"))
-    anomaly_flags = detect_anomalies(question, results)
-    if anomaly_flags:
-        print(f"[InsightBot] Anomalies detected: {len(anomaly_flags)}")
+    # Anomaly detection (80%)
+    client.chat_update(channel=channel, ts=ts,
+                       text=_progress_bar(80, "Detecting anomalies"))
+    flags = detect_anomalies(question, results)
 
-    # Step 6 — Summarise (90%)
-    client.chat_update(channel=channel, ts=ts, text=_progress_bar(90, "Summarising results"))
+    # Summarise (90%)
+    client.chat_update(channel=channel, ts=ts,
+                       text=_progress_bar(90, "Summarising results"))
     summary = summarise_results(question, results)
-    print(f"[InsightBot] Summary: {summary}")
 
-    # Step 7 — Build final reply
-    reply_text = f"{prefix}{summary}"
-    if anomaly_flags:
-        reply_text += "\n" + "\n".join(anomaly_flags)
+    # Build reply
+    reply = f"{prefix}{summary}"
+    if flags:
+        reply += "\n" + "\n".join(flags)
+    reply += DOWNLOAD_FOOTER
 
-    # Step 8 — Cache + log
+    # Generate CSV string
+    csv_string = results_to_csv_string(results)
+
+    # Cache + eval log
     latency = round(time.time() - start, 2)
     save_to_cache(question, summary, sql)
     log(question=question, sql=sql, rows_returned=len(results),
         latency_sec=latency, cached=False, status="pass",
-        anomalies=len(anomaly_flags))
+        anomalies=len(flags))
 
-    return reply_text, sql, "pass"
+    return reply, results, csv_string, "pass"
 
 
-# ---------------------------------------------------------------------------
-# Core handler — used by both DM and @mention
-# ---------------------------------------------------------------------------
+# ── Core message handler ──────────────────────────────────────────────────────
 def process_message(client, user: str, text: str, channel: str):
-    print(f"\n[InsightBot] User: {text}")
+    print(f"\n[InsightBot] User={user} Text={text}")
 
-    # Stats command — no progress bar needed
+    # ── Download request ──────────────────────────────────────────────────────
+    if is_download_request(text):
+        last = _last_interaction.get(user)
+        if not last or not last.get("csv_string"):
+            client.chat_postMessage(
+                channel=channel,
+                text=(f"<@{user}> No data to download yet — "
+                      f"ask me a data question first, then reply *download*.")
+            )
+            return
+
+        csv_bytes  = csv_string_to_bytes(last["csv_string"])
+        filename   = "insightbot_data.csv"
+
+        try:
+            client.files_upload_v2(
+                channel=channel,
+                content=csv_bytes,
+                filename=filename,
+                title="InsightBot Data Export",
+            )
+            print(f"[InsightBot] CSV uploaded for user={user}")
+
+            # Update Databricks row
+            if last.get("index_id"):
+                mark_csv_downloaded(last["index_id"])
+
+        except Exception as e:
+            print(f"[InsightBot] CSV upload failed: {e}")
+            client.chat_postMessage(
+                channel=channel,
+                text=f"<@{user}> Sorry, couldn't upload the file. Try again."
+            )
+        return
+
+    # ── Stats command ─────────────────────────────────────────────────────────
     if STATS_PATTERN.search(text):
         stats = get_stats()
         cache = cache_stats()
@@ -140,7 +196,7 @@ def process_message(client, user: str, text: str, channel: str):
         )
         return
 
-    # Intent check
+    # ── Intent check ──────────────────────────────────────────────────────────
     intent = classify_intent(text)
     print(f"[InsightBot] Intent: {intent}")
 
@@ -149,7 +205,8 @@ def process_message(client, user: str, text: str, channel: str):
             channel=channel,
             text=(f"Hi <@{user}>! 👋 I'm InsightBot — ask me anything about "
                   f"orders, revenue, sellers, products or delivery performance.\n\n"
-                  f"You can ask multiple questions at once — just number them or put each on a new line!")
+                  f"You can ask multiple questions at once — "
+                  f"just number them or put each on a new line!")
         )
         return
 
@@ -157,24 +214,50 @@ def process_message(client, user: str, text: str, channel: str):
         client.chat_postMessage(
             channel=channel,
             text=(f"Sorry <@{user}>, I can only answer questions about "
-                  f"business data — orders, revenue, sellers, products, and delivery.")
+                  f"business data — orders, revenue, sellers, products, delivery.")
         )
         return
 
-    # Split into individual questions
+    # ── Fetch user info for logging ───────────────────────────────────────────
+    user_info = get_user_info(client, user)
+    email     = user_info.get("email_id", "")
+    full_name = user_info.get("full_name", "")
+
+    # ── Split into individual questions ───────────────────────────────────────
     questions = _split_questions(text)
+    MAX_Q     = 5
+    questions = questions[:MAX_Q]
 
     if len(questions) == 1:
-        # Single question — post initial progress message then update it
+        # Single question
         msg = client.chat_postMessage(
             channel=channel,
             text=_progress_bar(10, "Understanding your question")
         )
         ts = msg["ts"]
 
-        reply, sql, status = _answer_with_progress(client, channel, ts, questions[0])
+        reply, results, csv_string, status = _answer_with_progress(
+            client, channel, ts, questions[0]
+        )
 
-        # Final update — replace progress bar with real answer
+        # Log to Databricks
+        index_id = log_interaction(
+            user_id=user,
+            email_id=email,
+            full_name=full_name,
+            question_asked=questions[0],
+            question_answered=reply,
+            generated_csv=csv_string if csv_string else None,
+            csv_downloaded="no",
+        )
+
+        # Store last interaction in memory
+        _last_interaction[user] = {
+            "results":    results,
+            "csv_string": csv_string,
+            "index_id":   index_id,
+        }
+
         client.chat_update(
             channel=channel,
             ts=ts,
@@ -182,18 +265,19 @@ def process_message(client, user: str, text: str, channel: str):
         )
 
     else:
-        # Multi-question — single progress bar for overall flow
-        import concurrent.futures
-        MAX_Q = 5
-        questions = questions[:MAX_Q]
+        # Multi-question
         print(f"[InsightBot] Multi-question: {len(questions)} questions")
         msg = client.chat_postMessage(
             channel=channel,
             text=_progress_bar(5, f"Processing {len(questions)} questions")
         )
-        ts = msg["ts"]
-
+        ts    = msg["ts"]
         parts = [f"<@{user}> Here are your {len(questions)} answers:\n"]
+
+        last_results    = []
+        last_csv_string = ""
+        last_index_id   = None
+
         for i, q in enumerate(questions, 1):
             pct = int((i / len(questions)) * 90)
             client.chat_update(
@@ -202,17 +286,50 @@ def process_message(client, user: str, text: str, channel: str):
                 text=_progress_bar(pct, f"Question {i}/{len(questions)}: {q[:40]}...")
             )
             print(f"\n[InsightBot] Question {i}/{len(questions)}: {q}")
+
             try:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                    future = ex.submit(_answer_with_progress, client, channel, ts, q, i)
-                    answer, _, _ = future.result(timeout=90)
+                    future = ex.submit(
+                        _answer_with_progress, client, channel, ts, q, i
+                    )
+                    answer, results, csv_string, status = future.result(timeout=90)
             except concurrent.futures.TimeoutError:
-                answer = f"*{i}.* ⏱ Question timed out — try asking it separately."
+                answer, results, csv_string, status = (
+                    f"*{i}.* ⏱ Question timed out — try asking it separately.",
+                    [], "", "fail"
+                )
             except Exception as e:
-                answer = f"*{i}.* ❌ Error: {str(e)[:80]}"
+                answer, results, csv_string, status = (
+                    f"*{i}.* ❌ Error: {str(e)[:80]}",
+                    [], "", "fail"
+                )
+
             parts.append(answer)
 
-        # Final update
+            # Log each question to Databricks
+            index_id = log_interaction(
+                user_id=user,
+                email_id=email,
+                full_name=full_name,
+                question_asked=q,
+                question_answered=answer,
+                generated_csv=csv_string if csv_string else None,
+                csv_downloaded="no",
+            )
+
+            # Keep last successful result for download
+            if results:
+                last_results    = results
+                last_csv_string = csv_string
+                last_index_id   = index_id
+
+        # Store last interaction in memory (last successful question)
+        _last_interaction[user] = {
+            "results":    last_results,
+            "csv_string": last_csv_string,
+            "index_id":   last_index_id,
+        }
+
         client.chat_update(
             channel=channel,
             ts=ts,
@@ -220,11 +337,9 @@ def process_message(client, user: str, text: str, channel: str):
         )
 
 
-# ---------------------------------------------------------------------------
-# Slack event handlers
-# ---------------------------------------------------------------------------
+# ── Slack event handlers ──────────────────────────────────────────────────────
 @app.message("")
-def handle_message(message, say, client):
+def handle_message(message, client):
     user    = message.get("user", "unknown")
     text    = message.get("text", "").strip()
     channel = message.get("channel", "")
@@ -234,12 +349,13 @@ def handle_message(message, say, client):
 
 
 @app.event("app_mention")
-def handle_mention(event, say, client):
+def handle_mention(event, client):
     user    = event.get("user", "unknown")
     channel = event.get("channel", "")
-    text    = event.get("text", "")
-    # Strip the bot mention
-    text = " ".join(w for w in text.split() if not w.startswith("<@")).strip()
+    text    = " ".join(
+        w for w in event.get("text", "").split()
+        if not w.startswith("<@")
+    ).strip()
     if not text:
         client.chat_postMessage(
             channel=channel,
@@ -249,11 +365,7 @@ def handle_mention(event, say, client):
     process_message(client, user, text, channel)
 
 
-# ---------------------------------------------------------------------------
-# Health check server (required for Render port detection)
-# ---------------------------------------------------------------------------
-import threading
-from flask import Flask as _Flask
+# ── Flask health check ────────────────────────────────────────────────────────
 _health_app = _Flask(__name__)
 
 @_health_app.route("/health")
@@ -265,12 +377,9 @@ def _run_health_server():
     _health_app.run(host="0.0.0.0", port=port)
 
 
-# ---------------------------------------------------------------------------
-# Start
-# ---------------------------------------------------------------------------
+# ── Slack auto-reconnect ──────────────────────────────────────────────────────
 def _run_slack():
-    import time as _time
-    _time.sleep(3)  # Give Flask time to bind port first
+    time.sleep(3)
     while True:
         try:
             print("InsightBot connecting to Slack...")
@@ -279,18 +388,14 @@ def _run_slack():
             print("Slack handler exited — reconnecting in 5s...")
         except Exception as e:
             print(f"Slack connection error: {e} — reconnecting in 5s...")
-        _time.sleep(5)
+        time.sleep(5)
 
 
+# ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     print("InsightBot starting...")
-    t = threading.Thread(target=_run_health_server, daemon=True)
-    t.start()
+    threading.Thread(target=_run_health_server, daemon=True).start()
     print(f"Health check running on port {os.getenv('FLASK_PORT', 3000)}")
-    s = threading.Thread(target=_run_slack, daemon=True)
-    s.start()
-    # Keep main thread alive — Flask health server and Slack run as daemon threads
-    import time as _time
+    threading.Thread(target=_run_slack, daemon=True).start()
     while True:
-        _time.sleep(60)
-
+        time.sleep(60)

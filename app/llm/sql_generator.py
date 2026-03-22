@@ -1,17 +1,26 @@
 import os
 import re
-import time
+import httpx
 from cerebras.cloud.sdk import Cerebras
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# ── Cerebras (primary) ────────────────────────────────────────────────────────
+_cerebras = Cerebras(api_key=os.getenv("CEREBRAS_API_KEY"))
+CEREBRAS_MODEL = "qwen-3-235b-a22b-instruct-2507"
+
+# ── Ollama (fallback) ─────────────────────────────────────────────────────────
+OLLAMA_URL  = "http://127.0.0.1:11434/api/generate"
+OLLAMA_MODEL = "mannix/defog-llama3-sqlcoder-8b"
 
 from app.rag.retriever import retrieve
-
-_client = Cerebras(api_key=os.getenv("CEREBRAS_API_KEY"))
 
 SQL_PROMPT = """You are an expert Databricks SQL generator. Convert the question into a single SQL query.
 
 STRICT RULES:
 - Use views by default. Use raw tables (olist_orders, olist_order_items, olist_products, product_category_translation, olist_order_reviews, olist_sellers) ONLY when views cannot answer
-- When using raw tables: ALWAYS join olist_products to product_category_translation on product_category_name to get English category names (product_category_name_english). NEVER return Portuguese category names.
+- When using raw tables: ALWAYS join olist_products to product_category_translation on product_category_name to get English category names. English name column is t.product_category_name_english (on the translation table alias t) — NEVER p.product_category_name_english. olist_products has NO product_category_name_english column.
 - NEVER join views to each other
 - Never invent columns not listed in the DDL
 - Never use SUM(*) — use COUNT(*) for row counts
@@ -46,31 +55,55 @@ def _extract_sql(raw: str) -> str:
         else:
             fallback = re.search(r'(?im)^(WITH|SELECT)\b', raw)
             sql = raw[fallback.start():].strip() if fallback else raw.strip()
-
     sql = sql.rstrip(";").strip()
     sql = re.sub(r'(?i)^(SELECT\s+)+', 'SELECT ', sql)
+    # Safety net: fix known alias mistake regardless of which model ran
+    sql = sql.replace("p.product_category_name_english", "t.product_category_name_english")
     return sql.strip()
+
+
+def _via_cerebras(prompt: str) -> str:
+    response = _cerebras.chat.completions.create(
+        model=CEREBRAS_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+        max_tokens=512,
+        timeout=45,
+    )
+    return response.choices[0].message.content.strip()
+
+
+def _via_ollama(prompt: str) -> str:
+    response = httpx.post(
+        OLLAMA_URL,
+        json={
+            "model":   OLLAMA_MODEL,
+            "prompt":  prompt,
+            "stream":  False,
+            "options": {"temperature": 0, "num_predict": 512, "stop": ["###", "\n\n\n"]}
+        },
+        timeout=120
+    )
+    return response.json()["response"].strip()
 
 
 def generate_sql(question: str) -> str:
     context = retrieve(question)
-    prompt = SQL_PROMPT.format(question=question, context=context)
+    prompt  = SQL_PROMPT.format(question=question, context=context)
 
-    for attempt in range(3):
-        try:
-            response = _client.chat.completions.create(
-                model="llama3.1-8b",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-                max_tokens=512,
-                timeout=45,
-            )
-            raw = response.choices[0].message.content.strip()
-            return _extract_sql(raw)
-        except Exception as e:
-            if "429" in str(e) and attempt < 2:
-                wait = (attempt + 1) * 10
-                print(f"[Groq] Rate limited, retrying in {wait}s...")
-                time.sleep(wait)
-            else:
-                raise
+    # Primary: Cerebras
+    try:
+        raw = _via_cerebras(prompt)
+        print("[LLM] SQL via Cerebras")
+        return _extract_sql(raw)
+    except Exception as e:
+        print(f"[LLM] Cerebras failed ({e}) — falling back to Ollama")
+
+    # Fallback: Ollama
+    try:
+        raw = _via_ollama(prompt)
+        print("[LLM] SQL via Ollama (fallback)")
+        return _extract_sql(raw)
+    except Exception as e:
+        print(f"[LLM] Ollama also failed ({e})")
+        raise RuntimeError("Both Cerebras and Ollama unavailable for SQL generation.")
