@@ -238,9 +238,7 @@ def process_message(client, user: str, text: str, channel: str):
             pass
 
         session_total  = stats.get("total", 0)
-        # Databricks is the superset (includes all sessions, survives resets).
-        # eval_log is a local subset — don't max() them, use Databricks directly.
-        alltime_total  = db_total if db_total > 0 else all_time.get("total", 0)
+        alltime_total  = max(all_time.get("total", 0), db_total)
 
         # ── No-data guard — show warm-up message instead of all-zeros ─────────
         if session_total == 0 and alltime_total == 0:
@@ -484,7 +482,7 @@ def process_message(client, user: str, text: str, channel: str):
             client, channel, ts, questions[0], user=user
         )
 
-        # Log to Databricks — include query_results_json for Tier-2/3 download fallback
+        # Log to Databricks
         index_id = log_interaction(
             user_id=user,
             email_id=email,
@@ -493,7 +491,6 @@ def process_message(client, user: str, text: str, channel: str):
             question_answered=reply,
             generated_csv=csv_string if csv_string else None,
             csv_downloaded="no",
-            query_results_json=json.dumps(results) if results else None,
         )
 
         # Preserve question + sql set by cache_hit_meta so Tier-4 re-run works
@@ -591,9 +588,6 @@ def process_message(client, user: str, text: str, channel: str):
 # ── Slack event handlers ──────────────────────────────────────────────────────
 @app.message("")
 def handle_message(message, client):
-    # Only handle original user messages — skip edits, deletes, bot posts
-    if message.get("subtype") in ("message_changed", "message_deleted", "bot_message"):
-        return
     user    = message.get("user", "unknown")
     text    = message.get("text", "").strip()
     channel = message.get("channel", "")

@@ -32,7 +32,7 @@ CEREBRAS_MODEL    = "qwen-3-235b-a22b-instruct-2507"
 OLLAMA_URL        = "http://127.0.0.1:11434/api/generate"
 OLLAMA_MODEL      = "mannix/defog-llama3-sqlcoder-8b"
 
-DOWNLOAD_FOOTER = "\n\n💾 *Want the full data?* Reply *download* to get a CSV."
+DOWNLOAD_FOOTER = "\n\n💾 *Want the full data?* Reply *@InsightBot download* to get a CSV."
 
 # ── Pre-flight unanswerable patterns ─────────────────────────────────────────
 UNANSWERABLE_PATTERNS = [
