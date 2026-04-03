@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>InsightBot — Architecture Diagram</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Segoe UI', Arial, sans-serif;
+  background: #f0f2f5;
+  color: #1a1a2e;
+}
+
+/* ── Page Shell ── */
+.page-wrap {
+  max-width: 1360px;
+  margin: 0 auto;
+  padding: 28px 32px 60px;
+}
+
+/* ── Header ── */
+.page-header {
+  text-align: center;
+  margin-bottom: 32px;
+}
+.page-header h1 {
+  font-size: 1.7rem;
+  font-weight: 800;
+  color: #1a1a2e;
+  letter-spacing: -0.5px;
+}
+.page-header p {
+  color: #666;
+  font-size: 0.85rem;
+  margin-top: 5px;
+}
+.page-header .sub {
+  display: inline-block;
+  background: #fff3e0;
+  color: #e64a19;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 12px;
+  border-radius: 20px;
+  margin-top: 8px;
+  border: 1px solid #ffccbc;
+}
+
+/* ── Diagram canvas ── */
+.diagram {
+  position: relative;
+  width: 100%;
+}
+.diagram-inner {
+  position: relative;
+  width: 1296px;
+  margin: 0 auto;
+}
+
+/* ── Arrow SVG overlay ── */
+#arrow-svg {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 5;
+}
+
+/* ── Phase sections (dashed boxes) ── */
+.phase {
+  position: relative;
+  border: 2px dashed #c0c0c0;
+  border-radius: 18px;
+  background: #fff;
+  padding: 38px 24px 24px;
+  margin-bottom: 20px;
+}
+.phase-title {
+  position: absolute;
+  top: -14px;
+  left: 22px;
+  background: #f0f2f5;
+  padding: 2px 14px;
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #444;
+  border-radius: 20px;
+  border: 1px solid #d0d0d0;
+}
+.phase-title span {
+  color: #e53935;
+}
+
+/* ── Node styles ── */
+.nodes-row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-wrap: nowrap;
+}
+.nodes-row.centered { justify-content: center; }
+.nodes-row.spaced   { justify-content: space-between; }
+
+.node {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  cursor: pointer;
+  transition: transform .15s, box-shadow .15s;
+  z-index: 10;
+}
+.node:hover { transform: translateY(-2px); }
+.node:hover .node-box { box-shadow: 0 6px 20px rgba(0,0,0,.18); }
+
+.node-box {
+  border-radius: 12px;
+  padding: 12px 14px;
+  min-width: 120px;
+  max-width: 148px;
+  border: 1.5px solid #e0e0e0;
+  background: #ffffff;
+  box-shadow: 0 2px 8px rgba(0,0,0,.08);
+  transition: box-shadow .15s;
+}
+.node-box.wide  { min-width: 160px; max-width: 190px; }
+.node-box.narrow{ min-width: 100px; max-width: 126px; }
+.node-box.tall  { padding: 16px 14px; }
+
+.node-icon {
+  font-size: 1.6rem;
+  margin-bottom: 6px;
+  line-height: 1;
+  display: block;
+}
+.node-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #1a1a2e;
+  line-height: 1.3;
+}
+.node-sub {
+  font-size: 0.6rem;
+  color: #888;
+  margin-top: 3px;
+  line-height: 1.3;
+}
+.step-label {
+  font-size: 0.62rem;
+  font-weight: 800;
+  color: #e53935;
+  margin-bottom: 5px;
+  letter-spacing: .3px;
+}
+
+/* Node color variants */
+.node-box.blue   { border-color: #90caf9; background: #e3f2fd; }
+.node-box.purple { border-color: #ce93d8; background: #f3e5f5; }
+.node-box.teal   { border-color: #80deea; background: #e0f7fa; }
+.node-box.amber  { border-color: #ffe082; background: #fffde7; }
+.node-box.green  { border-color: #a5d6a7; background: #e8f5e9; }
+.node-box.pink   { border-color: #f48fb1; background: #fce4ec; }
+.node-box.orange { border-color: #ffcc80; background: #fff3e0; }
+.node-box.red    { border-color: #ef9a9a; background: #ffebee; }
+.node-box.gray   { border-color: #bdbdbd; background: #f5f5f5; }
+.node-box.indigo { border-color: #9fa8da; background: #e8eaf6; }
+
+/* ── Arrow connector (inline, same row) ── */
+.arr {
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+  flex-shrink: 0;
+  color: #666;
+  font-size: 1rem;
+  z-index: 2;
+}
+.arr-label {
+  font-size: 0.55rem;
+  color: #999;
+  writing-mode: horizontal-tb;
+  text-align: center;
+  margin-top: 2px;
+}
+.arr-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* ── Small connector line going DOWN between phases ── */
+.v-connector {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 28px;
+  color: #aaa;
+  font-size: 1.1rem;
+  position: relative;
+  z-index: 2;
+}
+.v-connector .vc-label {
+  font-size: 0.6rem;
+  color: #bbb;
+  background: #f0f2f5;
+  padding: 1px 8px;
+  border-radius: 10px;
+  margin: 0 6px;
+}
+
+/* ── Branch / decision box ── */
+.decision-box {
+  background: #fff9c4;
+  border: 2px solid #f9a825;
+  border-radius: 10px;
+  padding: 10px 16px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #e65100;
+  text-align: center;
+  min-width: 110px;
+}
+
+/* ── Branch outcomes row ── */
+.outcomes {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  margin-top: 12px;
+}
+.outcome-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+.outcome-label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  padding: 2px 10px;
+  border-radius: 10px;
+}
+.outcome-label.hit    { background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; }
+.outcome-label.sug    { background: #fff3e0; color: #e65100; border: 1px solid #ffcc80; }
+.outcome-label.miss   { background: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }
+
+/* ── Multi-doc row ── */
+.doc-group {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+/* ── Legend ── */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 20px;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.68rem;
+  color: #555;
+  background: #fff;
+  padding: 4px 10px;
+  border-radius: 20px;
+  border: 1px solid #e0e0e0;
+}
+.legend-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+
+/* ── Detail tooltip ── */
+#tooltip {
+  position: fixed;
+  z-index: 1000;
+  background: #1a1a2e;
+  color: #e8e8f0;
+  padding: 14px 18px;
+  border-radius: 12px;
+  max-width: 280px;
+  font-size: 0.73rem;
+  line-height: 1.5;
+  box-shadow: 0 8px 32px rgba(0,0,0,.4);
+  display: none;
+  pointer-events: none;
+  border: 1px solid #333;
+}
+#tooltip h4 { font-size: 0.78rem; margin-bottom: 6px; color: #fff; }
+#tooltip ul { padding-left: 14px; }
+#tooltip li { margin-bottom: 3px; color: #bbb; }
+#tooltip li strong { color: #fff; }
+#tooltip .tt-close { display: none; }
+
+/* ── Two-column layout for some phases ── */
+.two-part {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 24px;
+  align-items: start;
+}
+.side-note {
+  background: #f9fbe7;
+  border: 1.5px dashed #c5e1a5;
+  border-radius: 12px;
+  padding: 14px;
+  font-size: 0.68rem;
+  color: #558b2f;
+  min-width: 160px;
+  max-width: 200px;
+  line-height: 1.5;
+}
+.side-note h5 { font-size: 0.7rem; font-weight: 700; margin-bottom: 5px; color: #33691e; }
+.side-note ul { padding-left: 14px; }
+
+/* ── Recovery loop box ── */
+.recovery-loop {
+  background: #fff3e0;
+  border: 1.5px dashed #ffb74d;
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 0.67rem;
+  color: #e65100;
+  text-align: center;
+  margin-top: 12px;
+}
+.recovery-loop h5 { font-weight: 700; margin-bottom: 4px; }
+
+/* ── Feedback loop box ── */
+.feedback-box {
+  background: #e0f7fa;
+  border: 1.5px dashed #4dd0e1;
+  border-radius: 12px;
+  padding: 12px 16px;
+  font-size: 0.67rem;
+  color: #006064;
+  margin-top: 14px;
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.feedback-box h5 { font-weight: 700; margin-bottom: 3px; color: #00838f; }
+.fb-item {
+  text-align: center;
+  background: #fff;
+  border: 1px solid #b2ebf2;
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-width: 130px;
+}
+
+/* Horizontal scroll on small screens */
+.diagram { overflow-x: auto; }
+
+/* Print styles */
+@media print {
+  body { background: white; }
+  .page-wrap { padding: 10px; }
+  #tooltip { display: none !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="page-wrap">
+
+  <!-- ═══ HEADER ═══ -->
+  <div class="page-header">
+    <h1>⚡ InsightBot — System Architecture</h1>
+    <p>How a natural-language question becomes a business answer in Slack</p>
+    <div class="sub">Olist E-Commerce Dataset · 2016–2018 · Databricks + Cerebras + ChromaDB</div>
+  </div>
+
+  <!-- ═══ DIAGRAM ═══ -->
+  <div class="diagram">
+  <div class="diagram-inner">
+
+  <!-- SVG overlay for cross-section arrows -->
+  <svg id="arrow-svg">
+    <defs>
+      <marker id="ah" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#888"/>
+      </marker>
+      <marker id="ah-red" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#e53935"/>
+      </marker>
+      <marker id="ah-teal" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#00838f"/>
+      </marker>
+      <marker id="ah-blue" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#1565c0"/>
+      </marker>
+    </defs>
+  </svg>
+
+
+  <!-- ══════════════════════════════════════════════
+       PHASE I — RAG Knowledge Base (one-time setup)
+  ══════════════════════════════════════════════ -->
+  <div class="phase" id="phase1">
+    <div class="phase-title"><span>Phase I</span> — RAG Knowledge Base <em style="font-weight:400;color:#999">(one-time setup)</em></div>
+
+    <div class="nodes-row">
+
+      <!-- Doc group -->
+      <div class="doc-group">
+        <div class="node" id="n-schema" data-tip="schema">
+          <div class="step-label">Doc 1</div>
+          <div class="node-box blue narrow tall">
+            <span class="node-icon">📄</span>
+            <div class="node-title">Schema<br>Definitions</div>
+            <div class="node-sub">4 views · 9 raw tables · DDL</div>
+          </div>
+        </div>
+        <div class="node" id="n-metrics" data-tip="metrics">
+          <div class="step-label">Doc 2</div>
+          <div class="node-box blue narrow tall">
+            <span class="node-icon">📊</span>
+            <div class="node-title">Metric<br>Definitions</div>
+            <div class="node-sub">KPIs · revenue · delivery · reviews</div>
+          </div>
+        </div>
+        <div class="node" id="n-bizlogic" data-tip="bizlogic">
+          <div class="step-label">Doc 3</div>
+          <div class="node-box blue narrow tall">
+            <span class="node-icon">📋</span>
+            <div class="node-title">Business<br>Logic</div>
+            <div class="node-sub">Olist context · SQL patterns · thresholds</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="arr"><div class="arr-col"><div>→</div><div class="arr-label">Step 1:<br>Chunking</div></div></div>
+
+      <div class="node" id="n-chunk" data-tip="chunk">
+        <div class="step-label">Step 1</div>
+        <div class="node-box indigo">
+          <span class="node-icon">✂️</span>
+          <div class="node-title">Document<br>Chunking</div>
+          <div class="node-sub">Split on ## headings</div>
+        </div>
+      </div>
+
+      <div class="arr"><div class="arr-col"><div>→</div><div class="arr-label">Step 2:<br>Embed</div></div></div>
+
+      <div class="node" id="n-embed" data-tip="embed">
+        <div class="step-label">Step 2</div>
+        <div class="node-box purple">
+          <span class="node-icon">🧮</span>
+          <div class="node-title">Embedding<br>Model</div>
+          <div class="node-sub">all-MiniLM-L6-v2<br>(ONNX)</div>
+        </div>
+      </div>
+
+      <div class="arr"><div class="arr-col"><div>→</div><div class="arr-label">Step 3:<br>Index</div></div></div>
+
+      <div class="node" id="n-ragdb" data-tip="ragdb">
+        <div class="step-label">Step 3</div>
+        <div class="node-box purple wide">
+          <span class="node-icon">🗄️</span>
+          <div class="node-title">ChromaDB<br><code style="font-size:.58rem;background:rgba(0,0,0,.06);padding:1px 5px;border-radius:3px">insightbot_rag</code></div>
+          <div class="node-sub">~25 chunks · cosine similarity</div>
+        </div>
+      </div>
+
+      <div class="arr" style="margin-left:auto; color:#aaa; flex-direction:column; font-size:.62rem; text-align:center; gap:2px">
+        <div style="font-size:.62rem; color:#aaa; font-style:italic; max-width:110px; text-align:center; line-height:1.4">Also stores learned Q→SQL examples from successful queries</div>
+      </div>
+
+    </div>
+  </div><!-- /phase1 -->
+
+  <div class="v-connector">↓ <span class="vc-label">User sends message</span> ↓</div>
+
+  <!-- ══════════════════════════════════════════════
+       PHASE II — Query Entry & Semantic Cache
+  ══════════════════════════════════════════════ -->
+  <div class="phase" id="phase2">
+    <div class="phase-title"><span>Phase II</span> — Query Entry &amp; Semantic Cache</div>
+
+    <div class="two-part">
+      <div>
+        <!-- Row 1: input → normalise → cache -->
+        <div class="nodes-row">
+
+          <div class="node" id="n-slack" data-tip="slack">
+            <div class="step-label">Input</div>
+            <div class="node-box green wide tall">
+              <span class="node-icon">💬</span>
+              <div class="node-title">Slack Message</div>
+              <div class="node-sub">"top 10 sellers by revenue"</div>
+            </div>
+          </div>
+
+          <div class="arr"><div class="arr-col"><div>→</div><div class="arr-label">Step 4:<br>Normalise</div></div></div>
+
+          <div class="node" id="n-norm" data-tip="norm">
+            <div class="step-label">Step 4</div>
+            <div class="node-box teal">
+              <span class="node-icon">🔧</span>
+              <div class="node-title">Text<br>Normaliser</div>
+              <div class="node-sub">Abbreviations · spell-correct</div>
+            </div>
+          </div>
+
+          <div class="arr"><div class="arr-col"><div>→</div><div class="arr-label">Step 5:<br>Cache lookup</div></div></div>
+
+          <div class="node" id="n-cache" data-tip="cache">
+            <div class="step-label">Step 5</div>
+            <div class="node-box purple wide tall">
+              <span class="node-icon">⚡</span>
+              <div class="node-title">Semantic Cache</div>
+              <div class="node-sub"><code style="font-size:.56rem;background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px">insightbot_cache</code></div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Cache outcome branches -->
+        <div style="margin-top:16px; padding-left: 8px;">
+          <div style="font-size:.65rem; color:#888; font-weight:700; margin-bottom:8px; text-align:center;">Cache Similarity Result →</div>
+          <div class="outcomes">
+            <div class="outcome-node">
+              <div class="outcome-label hit">≥ 0.92 — Direct Hit</div>
+              <div class="node-box green narrow" style="margin-top:4px; text-align:center; padding:8px 10px;">
+                <span class="node-icon" style="font-size:1.1rem">✅</span>
+                <div class="node-title" style="font-size:.62rem">Instant Answer<br>&lt; 0.3s</div>
+              </div>
+              <div style="font-size:.58rem;color:#aaa;text-align:center;max-width:100px;margin-top:4px">No Databricks call · No LLM call</div>
+            </div>
+            <div class="outcome-node">
+              <div class="outcome-label sug">0.75–0.91 — Suggestion</div>
+              <div class="node-box orange narrow" style="margin-top:4px; text-align:center; padding:8px 10px;">
+                <span class="node-icon" style="font-size:1.1rem">💡</span>
+                <div class="node-title" style="font-size:.62rem">Ask to Confirm<br>"Is this right?"</div>
+              </div>
+              <div style="font-size:.58rem;color:#aaa;text-align:center;max-width:100px;margin-top:4px">User replies <strong>yes</strong> → serve answer + enable download</div>
+            </div>
+            <div class="outcome-node">
+              <div class="outcome-label miss">&lt; 0.75 — Miss</div>
+              <div class="node-box red narrow" style="margin-top:4px; text-align:center; padding:8px 10px;">
+                <span class="node-icon" style="font-size:1.1rem">🔄</span>
+                <div class="node-title" style="font-size:.62rem">Run Full<br>Pipeline</div>
+              </div>
+              <div style="font-size:.58rem;color:#aaa;text-align:center;max-width:100px;margin-top:4px">Continues to Phase III →</div>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /left -->
+
+      <!-- Right side note: cache store details -->
+      <div class="side-note">
+        <h5>📦 What's Cached</h5>
+        <ul>
+          <li>Normalised question text</li>
+          <li>AI-generated summary answer</li>
+          <li>Original SQL query</li>
+          <li>Raw results as JSON</li>
+          <li>Timestamp</li>
+        </ul>
+        <div style="margin-top:8px; padding-top:8px; border-top:1px dashed #c5e1a5;">
+          <strong>Auto-tuning:</strong> Thresholds adjust based on confirmation rates (every 24 hrs)
+        </div>
+      </div>
+
+    </div><!-- /two-part -->
+  </div><!-- /phase2 -->
+
+  <div class="v-connector">↓ <span class="vc-label">Cache miss — continue pipeline</span> ↓</div>
+
+  <!-- ══════════════════════════════════════════════
+       PHASE III — SQL Generation Pipeline
+  ══════════════════════════════════════════════ -->
+  <div class="phase" id="phase3">
+    <div class="phase-title"><span>Phase III</span> — Intent, Guards &amp; SQL Generation</div>
+
+    <div class="two-part">
+      <div>
+        <div class="nodes-row">
+
+          <div class="node" id="n-intent" data-tip="intent">
+            <div class="step-label">Step 6</div>
+            <div class="node-box teal">
+              <span class="node-icon">🎯</span>
+              <div class="node-title">Intent<br>Classifier</div>
+              <div class="node-sub">Greeting / Data / Out-of-scope</div>
+            </div>
+          </div>
+
+          <div class="arr"><div class="arr-col"><div>→</div><div class="arr-label">Step 7:<br>Pre-flight</div></div></div>
+
+          <div class="node" id="n-preflight" data-tip="preflight">
+            <div class="step-label">Step 7</div>
+            <div class="node-box amber>">
+              <span class="node-icon">🛡️</span>
+              <div class="node-title">Pre-flight<br>Guards</div>
+              <div class="node-sub">Block unanswerable patterns</div>
+            </div>
+          </div>
+
+          <div class="arr"><div class="arr-col"><div>→</div><div class="arr-label">Step 8:<br>Generate SQL</div></div></div>
+
+          <div class="node" id="n-sqlgen" data-tip="sqlgen">
+            <div class="step-label">Step 8</div>
+            <div class="node-box amber wide tall">
+              <span class="node-icon">🤖</span>
+              <div class="node-title">SQL Generator</div>
+              <div class="node-sub">Cerebras Qwen-3-235B<br>+ RAG context</div>
+            </div>
+          </div>
+
+          <div class="arr"><div class="arr-col"><div>→</div><div class="arr-label">Step 9:<br>Validate</div></div></div>
+
+          <div class="node" id="n-guard" data-tip="guard">
+            <div class="step-label">Step 9</div>
+            <div class="node-box red">
+              <span class="node-icon">🔒</span>
+              <div class="node-title">SQL<br>Guardrails</div>
+              <div class="node-sub">Block mutations · Whitelist tables · LIMIT 100</div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- RAG retrieval label under SQL Gen -->
+        <div style="margin-top:10px; display:flex; align-items:center; gap:10px; padding-left:440px;">
+          <div style="font-size:.6rem; color:#7b1fa2; font-style:italic; display:flex; align-items:center; gap:4px;">
+            <span>↑</span> <strong>Step 8a:</strong> Retrieve top 8 relevant schema chunks from ChromaDB RAG
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: override rules note -->
+      <div class="side-note" style="background:#fffde7; border-color:#ffe082;">
+        <h5 style="color:#f57f17">⚡ SQL Override Rules</h5>
+        <div style="font-size:.64rem; color:#795548; line-height:1.5;">
+          3 patterns bypass the LLM entirely:
+        </div>
+        <ul style="margin-top:5px; font-size:.63rem; color:#555;">
+          <li>Avg delivery time by state</li>
+          <li>Monthly cancellation rates</li>
+          <li>Sellers below avg review</li>
+        </ul>
+        <div style="margin-top:6px; font-size:.61rem; color:#888;">Hardcoded SQL → guaranteed accuracy</div>
+        <div style="margin-top:8px; padding-top:8px; border-top:1px dashed #ffe082; font-size:.62rem; color:#795548;">
+          <strong>Fallback LLM:</strong> If Cerebras fails → Ollama SQLCoder-8B (local)
+        </div>
+      </div>
+
+    </div>
+  </div><!-- /phase3 -->
+
+  <div class="v-connector">↓ <span class="vc-label">Validated SQL</span> ↓</div>
+
+  <!-- ══════════════════════════════════════════════
+       PHASE IV — Data Execution & Answer
+  ══════════════════════════════════════════════ -->
+  <div class="phase" id="phase4">
+    <div class="phase-title"><span>Phase IV</span> — Databricks Execution &amp; Answer Generation</div>
+
+    <div class="two-part">
+      <div>
+        <!-- Main execution row -->
+        <div class="nodes-row">
+
+          <div class="node" id="n-db" data-tip="db">
+            <div class="step-label">Step 10</div>
+            <div class="node-box green wide tall">
+              <span class="node-icon">🔷</span>
+              <div class="node-title">Databricks<br>Execution</div>
+              <div class="node-sub">OAuth · 60s timeout<br>Returns list of rows</div>
+            </div>
+          </div>
+
+          <div class="arr"><div class="arr-col"><div>→</div><div class="arr-label">Step 11:<br>Scan results</div></div></div>
+
+          <div class="node" id="n-anomaly" data-tip="anomaly">
+            <div class="step-label">Step 11</div>
+            <div class="node-box orange">
+              <span class="node-icon">⚠️</span>
+              <div class="node-title">Anomaly<br>Detection</div>
+              <div class="node-sub">Delivery · Cancel · Revenue · Reviews</div>
+            </div>
+          </div>
+
+          <div class="arr"><div class="arr-col"><div>→</div><div class="arr-label">Step 12:<br>Summarise</div></div></div>
+
+          <div class="node" id="n-summ" data-tip="summ">
+            <div class="step-label">Step 12</div>
+            <div class="node-box pink wide tall">
+              <span class="node-icon">✍️</span>
+              <div class="node-title">AI Summariser</div>
+              <div class="node-sub">Cerebras → 2–3 sentence<br>plain-English answer</div>
+            </div>
+          </div>
+
+          <div class="arr"><div class="arr-col"><div>→</div><div class="arr-label">Step 13:<br>Respond</div></div></div>
+
+          <div class="node" id="n-reply" data-tip="reply">
+            <div class="step-label">Step 13</div>
+            <div class="node-box green wide tall">
+              <span class="node-icon">📤</span>
+              <div class="node-title">Slack Reply</div>
+              <div class="node-sub">Answer + anomaly flags<br>+ 💾 download footer</div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Error recovery loop -->
+        <div class="recovery-loop" style="max-width:280px; margin-top:12px;">
+          <h5>🔄 Auto-Recovery Loop (on Databricks error)</h5>
+          Classify error type → Rewrite SQL (LLM) → Retry (max 2×)<br>
+          <div style="margin-top:5px; font-size:.62rem;">
+            <strong>Error types:</strong> column not found · table not found · syntax error · timeout · no rows<br>
+            <strong>If exhausted:</strong> Suggestion Engine finds nearest answerable alternative
+          </div>
+        </div>
+
+      </div><!-- /left -->
+
+      <!-- Right: output details -->
+      <div class="side-note" style="background:#fce4ec; border-color:#f48fb1;">
+        <h5 style="color:#880e4f">📊 Anomaly Thresholds</h5>
+        <ul style="font-size:.63rem; color:#555;">
+          <li>Delivery &gt; <strong>20 days</strong></li>
+          <li>Cancellation rate &gt; <strong>5%</strong></li>
+          <li>Revenue drop &gt; <strong>10% MoM</strong></li>
+          <li>Seller review &lt; <strong>3.0 / 5</strong></li>
+        </ul>
+        <div style="margin-top:8px; padding-top:8px; border-top:1px dashed #f48fb1; font-size:.62rem; color:#555;">
+          Up to <strong>3 unique flags</strong> surfaced per response
+        </div>
+        <div style="margin-top:6px; font-size:.62rem; color:#555;">
+          💾 User replies <code style="font-size:.58rem">download</code> → full CSV uploaded to Slack
+        </div>
+      </div>
+
+    </div><!-- /two-part -->
+
+    <!-- ── Feedback loop ── -->
+    <div class="feedback-box" id="n-learn" data-tip="learn">
+      <div style="font-size:.7rem; font-weight:800; color:#006064; min-width:100px; text-align:center;">
+        🧠 Step 14:<br>Self-Learning<br><span style="font-weight:400;font-size:.6rem">(background)</span>
+      </div>
+      <div class="fb-item">
+        <h5>⚡ Cache Update</h5>
+        Save Q + answer + SQL + raw results JSON → ChromaDB cache
+      </div>
+      <div class="fb-item">
+        <h5>📚 RAG Promotion</h5>
+        Add successful Q→SQL as "LEARNED EXAMPLE" into schema knowledge base
+      </div>
+      <div class="fb-item">
+        <h5>📈 Threshold Tuning</h5>
+        Adjust cache hit/suggest thresholds based on last 7 days of confirmation rates
+      </div>
+      <div class="fb-item">
+        <h5>🔤 Abbreviation Learning</h5>
+        Track failed query tokens — auto-register new abbreviations after 3+ occurrences
+      </div>
+      <div class="fb-item">
+        <h5>📝 Audit Log</h5>
+        Write to <code style="font-size:.58rem">eval_log.csv</code> + Databricks <code style="font-size:.58rem">insightbot_interactions</code> table
+      </div>
+    </div>
+
+  </div><!-- /phase4 -->
+
+  </div><!-- /diagram-inner -->
+  </div><!-- /diagram -->
+
+  <!-- ── Legend ── -->
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#90caf9"></div>RAG Docs</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ce93d8"></div>Vector Store / LLM</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#80deea"></div>Input / Normalise</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ffe082"></div>SQL Generation</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#a5d6a7"></div>Databricks / Output</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#f48fb1"></div>AI Summarisation</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#80deea"></div>Self-Learning</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ef9a9a"></div>Error / Miss</div>
+  </div>
+
+</div><!-- /page-wrap -->
+
+<!-- ── Tooltip ── -->
+<div id="tooltip"></div>
+
+<!-- ══════════════════════ TOOLTIP DATA + CROSS-SECTION SVG ARROWS ══════════════════════ -->
+<script>
+const TIPS = {
+  schema:    { title: "Schema Definitions", items: ["DDL for 4 views: vw_orders_metrics, vw_seller_metrics, vw_product_metrics, vw_monthly_revenue","9 raw tables: olist_orders, olist_products, olist_order_items, olist_reviews, olist_sellers, olist_customers, olist_payments, olist_geolocation, product_category_translation","Rules: use views by default, never join views, never invent columns"] },
+  metrics:   { title: "Metric Definitions", items: ["Revenue metrics: total, GMV, AOV, MoM growth","Order metrics: cancellation rate, delivery rate, avg delivery days","Seller/product metrics: top sellers, review scores, category performance","Anomaly indicators: revenue drop >10%, cancellation spike >20%, delivery >20d"] },
+  bizlogic:  { title: "Business Logic", items: ["Dataset context: Olist Brazil 2016–2018, currency R$","Order lifecycle: created → approved → invoiced → shipped → delivered / canceled","Geographic context: 27 Brazilian states, remote state delivery differences","SQL pattern library: aggregation, ranking, LAG for MoM, year-over-year"] },
+  chunk:     { title: "Document Chunking", items: ["Splits each markdown file on level-2 headings (##)","Each heading + its content = one chunk","~25 total chunks across 3 documents","Preserves heading text as metadata for retrieval scoring"] },
+  embed:     { title: "Embedding Model", items: ["Model: all-MiniLM-L6-v2 (ONNX runtime — no network call)","384-dimensional dense vectors","Runs locally inside the Docker container","Same model used for both indexing and query-time embedding"] },
+  ragdb:     { title: "ChromaDB — RAG Collection", items: ["Collection: insightbot_rag","Distance metric: cosine similarity","Retrieves top 8 most relevant chunks per query","Also stores auto-promoted Q→SQL learned examples from successful queries"] },
+  slack:     { title: "Slack Message Input", items: ["Triggered by direct message or @mention","Multi-question support: up to 5 questions per message (numbered or line-separated)","Special commands: 'download', 'yes/no', 'insightbot stats'","Bot strips its own @mention token before processing"] },
+  norm:      { title: "Text Normaliser", items: ["Lowercase + whitespace strip","Abbreviation expansion: rev→revenue, avg→average, MoM→month over month, etc.","Spell correction via symspellpy — protected domain terms: olist, databricks, seller_id","Self-learning: auto-registers new abbreviations discovered from failed queries (≥3 occurrences)"] },
+  cache:     { title: "Semantic Cache (ChromaDB)", items: ["Collection: insightbot_cache","Embedding model: all-MiniLM-L6-v2","≥0.92 similarity → Direct Hit (instant, no DB/LLM call)","0.75–0.91 → Suggestion shown (user confirms with 'yes')","<0.75 → Cache miss → runs full pipeline","Stores: question, answer, SQL, raw results JSON, timestamp"] },
+  intent:    { title: "Intent Classifier", items: ["Simple regex-based, no LLM call needed","'greeting': hi, hello, help, who are you → welcome message","'text_to_sql': how many, top, revenue, orders, compare → data pipeline","'out_of_scope': no data patterns → polite refusal"] },
+  preflight: { title: "Pre-Flight Guards", items: ["Blocked pattern 1: seller improvement/trends over time (vw_seller_metrics has no time dimension)","Blocked pattern 2: cancellations by product category (vw_orders_metrics has no category column)","On block: Suggestion Engine finds nearest answerable alternative from cache + RAG","Self-learning: if a question type fails 5+ times in 7 days, auto-added to block list"] },
+  sqlgen:    { title: "SQL Generator", items: ["Step 1: Retrieve top 8 RAG chunks from ChromaDB (schema + business context)","Step 2: Check 3 hardcoded override patterns → use fixed SQL if matched","Step 3: Build prompt (question + RAG context + strict SQL rules)","Step 4: Call Cerebras Qwen-3-235B (temperature 0, max 512 tokens, timeout 45s)","Step 5: Fallback to Ollama SQLCoder-8B if Cerebras unavailable","Step 6: Extract SQL from code fence, apply alias fixes"] },
+  guard:     { title: "SQL Guardrails", items: ["Must start with SELECT or WITH","Blocked keywords: DROP, DELETE, UPDATE, INSERT, ALTER, TRUNCATE, CREATE, MERGE, GRANT, REVOKE","Only 13 allowed sources: 4 views + 9 raw tables","LIMIT enforced: cap at 100 rows (append if missing, replace if >100)"] },
+  db:        { title: "Databricks Execution", items: ["Databricks SQL Connector, OAuth token","60-second socket timeout","Returns list of dicts (column → value per row)","On error: classify failure type → attempt recovery → retry up to 2×","Recovery strategies: LLM SQL rewrite, query constraint, query broadening","On exhaustion: Suggestion Engine activates"] },
+  anomaly:   { title: "Anomaly Detection", items: ["Delivery time > 20 days → flag with state name","Cancellation rate > 5% → flag with month/period","Revenue MoM drop > 10% → flag with period","Seller avg review < 3.0 → flag with seller ID","Max 3 unique flags per response, deduplicated","Completely automatic — no user configuration required"] },
+  summ:      { title: "AI Summariser", items: ["Takes first 20 rows as input sample","Prompt: 'Write a clear 2-3 sentence answer. Use actual numbers. R$ prefix for money.'","Primary: Cerebras Qwen-3-235B (temperature 0, max 100 tokens)","Fallback: Ollama SQLCoder-8B","Post-processing: remove padding phrases, limit to 3 sentences, ensure ends with period"] },
+  reply:     { title: "Slack Response", items: ["Live progress bar updates: 20% → 40% → 60% → 80% → 90% → final","Answer + any anomaly flags appended","Footer: '💾 Want the full data? Reply with download'","User replies 'download' → CSV file uploaded to Slack thread","Multi-question: up to 5 numbered answers in one message"] },
+  learn:     { title: "Self-Learning Feedback Engine", items: ["Runs in background thread — never slows the response","Cache update: saves question + answer + SQL + raw JSON results","RAG promotion: adds Q→SQL pair as LEARNED EXAMPLE into ChromaDB RAG","Threshold tuning: adjusts 0.92 / 0.75 thresholds based on 7-day confirmation rates (runs max every 24h)","Abbreviation learning: tracks short tokens in failed queries, auto-registers after 3+ occurrences","Failure pattern tracking: if same error type hits 5+ times in 7 days, auto-adds to pre-flight block list","Audit: logs all interactions to eval_log.csv + Databricks default.insightbot_interactions table"] },
+};
+
+// ── Tooltip logic ──
+const tooltip = document.getElementById('tooltip');
+let tipTimer;
+
+function showTip(e, key) {
+  const d = TIPS[key];
+  if (!d) return;
+  clearTimeout(tipTimer);
+  let html = `<h4>${d.title}</h4><ul>`;
+  d.items.forEach(i => {
+    const parts = i.split(':');
+    if (parts.length > 1) html += `<li><strong>${parts[0]}:</strong>${parts.slice(1).join(':')}</li>`;
+    else html += `<li>${i}</li>`;
+  });
+  html += '</ul>';
+  tooltip.innerHTML = html;
+  tooltip.style.display = 'block';
+  moveTip(e);
+}
+function moveTip(e) {
+  const pad = 16;
+  let x = e.clientX + pad, y = e.clientY + pad;
+  if (x + 290 > window.innerWidth) x = e.clientX - 290 - pad;
+  if (y + tooltip.offsetHeight > window.innerHeight) y = e.clientY - tooltip.offsetHeight - pad;
+  tooltip.style.left = x + 'px';
+  tooltip.style.top  = y + 'px';
+}
+function hideTip() {
+  tipTimer = setTimeout(() => { tooltip.style.display = 'none'; }, 120);
+}
+
+document.querySelectorAll('[data-tip]').forEach(el => {
+  const key = el.dataset.tip;
+  el.addEventListener('mouseenter', e => showTip(e, key));
+  el.addEventListener('mousemove',  e => moveTip(e));
+  el.addEventListener('mouseleave', hideTip);
+});
+
+// ── Draw cross-section SVG arrows ──
+function getCenter(id) {
+  const el = document.getElementById(id);
+  if (!el) return null;
+  const elRect  = el.getBoundingClientRect();
+  const wrap    = document.querySelector('.diagram-inner');
+  const wrapRect = wrap.getBoundingClientRect();
+  return {
+    x: elRect.left - wrapRect.left + elRect.width  / 2,
+    y: elRect.top  - wrapRect.top  + elRect.height / 2,
+    top:    elRect.top  - wrapRect.top,
+    bottom: elRect.top  - wrapRect.top + elRect.height,
+    left:   elRect.left - wrapRect.left,
+    right:  elRect.left - wrapRect.left + elRect.width,
+  };
+}
+
+function drawCurvedArrow(svg, x1, y1, x2, y2, color, label, markerId, dashed) {
+  const dx = (x2 - x1) * 0.5;
+  const dy = (y2 - y1) * 0.5;
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+  path.setAttribute('d', d);
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', color || '#888');
+  path.setAttribute('stroke-width', '1.8');
+  path.setAttribute('marker-end', `url(#${markerId || 'ah'})`);
+  if (dashed) path.setAttribute('stroke-dasharray', '5,4');
+  svg.appendChild(path);
+
+  if (label) {
+    const midX = x1 + (x2 - x1) * 0.5;
+    const midY = y1 + (y2 - y1) * 0.5 - 10;
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    const w = label.length * 5.5 + 8;
+    rect.setAttribute('x', midX - w/2); rect.setAttribute('y', midY - 9);
+    rect.setAttribute('width', w); rect.setAttribute('height', 16);
+    rect.setAttribute('rx', '5'); rect.setAttribute('fill', '#f0f2f5');
+    rect.setAttribute('stroke', '#ccc'); rect.setAttribute('stroke-width', '1');
+    text.setAttribute('x', midX); text.setAttribute('y', midY + 2);
+    text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('font-size', '9'); text.setAttribute('fill', color || '#888');
+    text.setAttribute('font-family', 'Arial, sans-serif');
+    text.textContent = label;
+    svg.appendChild(rect); svg.appendChild(text);
+  }
+}
+
+function drawArrows() {
+  const svg   = document.getElementById('arrow-svg');
+  const wrap  = document.querySelector('.diagram-inner');
+  const h     = wrap.getBoundingClientRect().height;
+  svg.setAttribute('viewBox', `0 0 ${wrap.offsetWidth} ${h}`);
+  svg.style.height = h + 'px';
+
+  // Clear previous
+  while (svg.children.length > 1) svg.removeChild(svg.lastChild);
+
+  const ragdb   = getCenter('n-ragdb');
+  const sqlgen  = getCenter('n-sqlgen');
+  const learn   = getCenter('n-learn');
+  const cache   = getCenter('n-cache');
+  const norm    = getCenter('n-norm');
+
+  if (ragdb && sqlgen) {
+    // RAG → SQL Generator (down and slightly left)
+    drawCurvedArrow(svg,
+      ragdb.x, ragdb.bottom,
+      sqlgen.x + 20, sqlgen.top,
+      '#7b1fa2', 'RAG context', 'ah', true
+    );
+  }
+
+  if (learn && cache) {
+    // Self-Learn feedback → Cache (up)
+    const lx = learn.left + 80;
+    const ly = learn.top;
+    const cx = cache.right;
+    const cy = cache.y;
+    drawCurvedArrow(svg, lx, ly, cx, cy, '#00838f', 'update cache', 'ah-teal', true);
+  }
+
+  if (learn && ragdb) {
+    // Self-Learn → RAG (up, right side)
+    const lx2 = learn.right - 60;
+    const ly2 = learn.top;
+    const rx  = ragdb.right;
+    const ry  = ragdb.y;
+    drawCurvedArrow(svg, lx2, ly2, rx, ry, '#00838f', 'promote to RAG', 'ah-teal', true);
+  }
+}
+
+window.addEventListener('load',   drawArrows);
+window.addEventListener('resize', drawArrows);
+</script>
+
+</body>
+</html>

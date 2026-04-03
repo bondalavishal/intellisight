@@ -17,8 +17,13 @@ from app.llm.intent import classify_intent
 from app.llm.sql_generator import generate_sql
 from app.sql.guardrails import validate_sql, enforce_limit
 from app.sql.connector import run_query
-from app.eval.cache import get_cached, save_to_cache, cache_stats
+from app.eval.cache import get_cached, save_to_cache, cache_stats, promote_suggestion
 from app.eval.logger import log, get_stats
+from app.utils.normaliser import normalise
+from app.sql.error_classifier import classify, is_recoverable
+from app.sql.recovery import attempt_recovery
+from app.eval.feedback_engine import on_success, on_failure, on_cache_miss
+from app.slack.suggestion_engine import find_alternatives, format_for_slack
 
 import os
 from cerebras.cloud.sdk import Cerebras as _Cerebras
@@ -27,7 +32,7 @@ CEREBRAS_MODEL    = "qwen-3-235b-a22b-instruct-2507"
 OLLAMA_URL        = "http://127.0.0.1:11434/api/generate"
 OLLAMA_MODEL      = "mannix/defog-llama3-sqlcoder-8b"
 
-DOWNLOAD_FOOTER = "\n\n💾 *Want the full data?* Reply with *download* to get a CSV."
+DOWNLOAD_FOOTER = "\n\n💾 *Want the full data?* Reply *@InsightBot download* to get a CSV."
 
 # ── Pre-flight unanswerable patterns ─────────────────────────────────────────
 UNANSWERABLE_PATTERNS = [
@@ -208,7 +213,7 @@ Answer:"""
 
 def summarise_results(question: str, results: list[dict]) -> str:
     if not results:
-        return "The query returned no results."
+        return "The query ran successfully but returned no data for those filters."
     if len(results) == 1 and "message" in results[0]:
         return results[0]["message"]
     sample       = results[:20]
@@ -260,75 +265,262 @@ def _split_questions(text: str) -> list[str]:
     return [text.strip()]
 
 
+# ── Destructive SQL pattern (checked before normalisation) ────────────────────
+_DESTRUCTIVE_INPUT_RE = re.compile(
+    r'^\s*(DELETE|DROP|UPDATE|INSERT\s+INTO|ALTER|TRUNCATE|MERGE|GRANT|REVOKE)\b',
+    re.IGNORECASE,
+)
+
 # ── Main handler ──────────────────────────────────────────────────────────────
 
 def handle_question(user_id: str, question: str) -> tuple:
     """
-    Returns: (reply: str, results: list[dict], csv_string: str)
-      - reply      → text to post in Slack
-      - results    → raw Databricks rows (empty list if not a data query)
-      - csv_string → CSV string of results (empty string if not a data query)
+    Returns: (reply, results, csv_string, pending_data)
+      - reply        → text to post in Slack
+      - results      → raw Databricks rows (empty list if not a data query)
+      - csv_string   → CSV string of results (empty string if not a data query)
+      - pending_data → dict with suggestion data if match_type=suggestion, else None
     """
     print(f"\n[InsightBot] User: {question}")
     start = time.time()
 
+    # ── Pre-flight: block raw destructive SQL commands ────────────────────────
+    if _DESTRUCTIVE_INPUT_RE.search(question):
+        print(f"[Guardrails] Blocked destructive input: {question[:60]}")
+        log(question=question, latency_sec=0, status="blocked",
+            error="destructive_sql_attempt")
+        return (
+            f"<@{user_id}> 🚫 That looks like a destructive SQL command. "
+            f"I only run *SELECT* queries — I can't modify or delete data.",
+            [], "", None,
+        )
+
+    # ── Layer 1: Normalise input ──────────────────────────────────────────────
+    # Spell correction + abbreviation expansion + punctuation normalisation
+    # Runs before cache lookup so typos and abbreviations still hit the cache
+    normalised = normalise(question)
+
     # ── Cache check ───────────────────────────────────────────────────────────
-    cached = get_cached(question)
+    cached = get_cached(normalised)
     if cached:
-        log(question=question, sql=cached["sql"],
-            latency_sec=round(time.time()-start, 2),
-            cached=True, status="cache_hit")
-        # No similarity score shown to user — clean answer only
-        reply = f"<@{user_id}> {cached['answer']}{DOWNLOAD_FOOTER}"
-        return reply, [], ""
+        match_type = cached.get("match_type", "direct_hit")
+
+        if match_type == "direct_hit":
+            log(question=normalised, sql=cached["sql"],
+                latency_sec=round(time.time()-start, 2),
+                cached=True, status="cache_hit",
+                normalised_question=normalised)
+            reply = f"<@{user_id}> {cached['answer']}{DOWNLOAD_FOOTER}"
+            return reply, [], "", {
+                "type":     "cache_hit_meta",
+                "sql":      cached.get("sql", ""),
+                "question": normalised,
+            }
+
+        if match_type == "suggestion":
+            # If the question is unanswerable (e.g. asks for time-series data that
+            # doesn't exist), don't confirm the cache suggestion as if it answers it.
+            # Instead route to the unanswerable handler — but seed find_alternatives
+            # with the cache match so we always have at least one ready-to-run option.
+            unanswerable_reason = _check_unanswerable(normalised)
+            if unanswerable_reason:
+                log(question=normalised, latency_sec=round(time.time()-start, 2),
+                    status="blocked", error=unanswerable_reason,
+                    normalised_question=normalised)
+                from app.slack.suggestion_engine import SuggestedAlternative, SuggestionResult, format_for_slack as _fmt
+                # Seed the suggestion with the cache match we already have
+                seed_alt = SuggestedAlternative(
+                    question   = cached["matched_question"],
+                    similarity = cached["similarity"],
+                    source     = "cache",
+                    answer     = cached["answer"],
+                    sql        = cached["sql"],
+                    can_run    = True,
+                )
+                suggestion = find_alternatives(
+                    normalised, dead_end_type="unanswerable",
+                    exclude_question=normalised,
+                )
+                # Prepend the cache match so it's always the first option
+                all_alts = [seed_alt] + [
+                    a for a in suggestion.alternatives
+                    if a.question != seed_alt.question
+                ]
+                result = SuggestionResult(found=True, alternatives=all_alts[:3],
+                                          dead_end_type="unanswerable")
+                suggestion_text = _fmt(
+                    result, user_id,
+                    context=f"Sorry <@{user_id}>, I can't answer that directly: "
+                            f"_{unanswerable_reason}_",
+                )
+                return suggestion_text, [], "", {"type": "alternatives", "alternatives": all_alts[:3]}
+
+            # Normal suggestion-band path: question is answerable, cache is close
+            log(question=normalised, sql=cached["sql"],
+                latency_sec=round(time.time()-start, 2),
+                cached=True, status="cache_suggestion",
+                normalised_question=normalised)
+            on_cache_miss(normalised)  # learn from the near-miss
+            similarity_pct = round(cached["similarity"] * 100, 1)
+            reply = (
+                f"<@{user_id}> I found a similar question in my cache "
+                f"({similarity_pct}% match):\n\n"
+                f"> _{cached['matched_question']}_\n\n"
+                f"*Answer:* {cached['answer']}\n\n"
+                f"\ud83d\udca1 _If this answers your question, reply *yes* to confirm. "
+                f"Otherwise rephrase and I'll run a fresh query._"
+            )
+            pending_data = {
+                "question":   normalised,
+                "answer":     cached["answer"],
+                "sql":        cached["sql"],
+                "results":    [],
+                "csv_string": "",
+            }
+            return reply, [], "", pending_data
 
     # ── Intent ────────────────────────────────────────────────────────────────
-    intent = classify_intent(question)
+    intent = classify_intent(normalised)
     if intent == "greeting":
         reply = (f"Hi <@{user_id}>! 👋 I'm InsightBot — ask me anything about "
                  f"orders, revenue, sellers, products or delivery performance.")
-        return reply, [], ""
+        return reply, [], "", None
     if intent == "out_of_scope":
         reply = (f"Sorry <@{user_id}>, I can only answer questions about "
                  f"business data — orders, revenue, sellers, products, delivery.")
-        return reply, [], ""
+        return reply, [], "", None
 
     # ── Pre-flight ────────────────────────────────────────────────────────────
-    reason = _check_unanswerable(question)
+    reason = _check_unanswerable(normalised)
     if reason:
-        log(question=question, latency_sec=round(time.time()-start, 2),
+        log(question=normalised, latency_sec=round(time.time()-start, 2),
             status="blocked", error=reason)
+        # Suggestion engine — find closest answerable alternative
+        suggestion = find_alternatives(normalised, dead_end_type="unanswerable",
+                                       exclude_question=normalised)
+        if suggestion.found:
+            suggestion_text = format_for_slack(
+                suggestion, user_id,
+                context=f"Sorry <@{user_id}>, I can't answer that directly: _{reason}_"
+            )
+            return suggestion_text, [], "", {"type": "alternatives", "alternatives": suggestion.alternatives}
         reply = f"<@{user_id}> Sorry, that can't be answered: {reason}"
-        return reply, [], ""
+        return reply, [], "", None
 
     # ── SQL generation ────────────────────────────────────────────────────────
-    sql = _generate_sql_with_overrides(question)
+    sql = _generate_sql_with_overrides(normalised)
     print(f"[InsightBot] SQL: {sql[:80]}...")
 
     is_valid, reason = validate_sql(sql)
     if not is_valid:
-        log(question=question, sql=sql,
+        log(question=normalised, sql=sql,
             latency_sec=round(time.time()-start, 2),
             status="fail", error=reason)
         reply = f"Sorry <@{user_id}>, couldn't generate a safe query. Try rephrasing."
-        return reply, [], ""
+        return reply, [], "", None
 
     sql = enforce_limit(sql)
 
-    # ── Databricks execution ──────────────────────────────────────────────────
-    try:
-        results = run_query(sql)
-        print(f"[InsightBot] Rows: {len(results)}")
-    except Exception as e:
-        log(question=question, sql=sql,
+    # ── Databricks execution + Layer 4: Failure Classification + Recovery ───────
+    MAX_RETRIES = 2
+    attempt     = 0
+    results     = None
+    last_error  = None
+
+    while attempt < MAX_RETRIES:
+        try:
+            results = run_query(sql)
+            # Explicit no-rows sentinel — treated as a soft failure
+            if not results:
+                from app.sql.error_classifier import FailureType as _FT
+                failure = _FT(
+                    name="no_rows", user_message="Query returned no data.",
+                    recovery_hint="broaden_query", raw_error="no_rows"
+                )
+                recovery = attempt_recovery(sql, normalised, failure)
+                if recovery.success:
+                    try:
+                        results = run_query(recovery.sql)
+                        sql = recovery.sql
+                        print(f"[InsightBot] No-rows recovery succeeded")
+                    except Exception:
+                        results = []
+                else:
+                    results = []
+            print(f"[InsightBot] Rows: {len(results)}")
+            break  # success — exit retry loop
+
+        except Exception as e:
+            last_error = str(e)
+            attempt   += 1
+            print(f"[InsightBot] Databricks error (attempt {attempt}/{MAX_RETRIES}): {last_error[:120]}")
+
+            # Classify the failure
+            failure = classify(last_error)
+            print(f"[InsightBot] Classified as: {failure.name} | hint: {failure.recovery_hint}")
+
+            log(question=normalised, sql=sql,
+                latency_sec=round(time.time()-start, 2),
+                status=f"fail_attempt_{attempt}",
+                error=f"{failure.name}: {last_error[:200]}")
+
+            # Non-recoverable — break immediately, no point retrying
+            if not is_recoverable(failure):
+                reply = (
+                    f"<@{user_id}> {failure.user_message}\n\n"
+                    f"_This issue requires an admin to resolve — I can't fix it automatically._"
+                )
+                return reply, [], "", None
+
+            # Attempt recovery
+            if attempt < MAX_RETRIES:
+                recovery = attempt_recovery(sql, normalised, failure)
+                if recovery.success:
+                    print(f"[InsightBot] Recovery produced rewritten SQL — retrying")
+                    sql = recovery.sql  # retry with rewritten SQL
+                else:
+                    print(f"[InsightBot] Recovery produced no SQL — escalating")
+                    break  # recovery failed, stop retrying
+
+    # If we exhausted retries without results
+    if results is None:
+        failure = classify(last_error or "unknown error")
+        log(question=normalised, sql=sql,
             latency_sec=round(time.time()-start, 2),
-            status="fail", error=str(e))
-        reply = f"Sorry <@{user_id}>, query error. Try rephrasing."
-        return reply, [], ""
+            status="fail", error=f"exhausted_retries: {failure.name}")
+        # Self-learning: track failure pattern + learn abbreviations (background)
+        on_failure(normalised, failure.name)
+
+        log(question=normalised, sql=sql,
+            latency_sec=round(time.time()-start, 2),
+            status="exhausted_retries",
+            failure_type=failure.name,
+            recovery_attempted="yes",
+            normalised_question=normalised)
+
+        # Suggestion engine — find closest answerable alternative
+        suggestion = find_alternatives(normalised, dead_end_type="failure",
+                                       exclude_question=normalised)
+        if suggestion.found:
+            suggestion_text = format_for_slack(
+                suggestion, user_id,
+                context=(
+                    f"<@{user_id}> I tried {MAX_RETRIES} times but couldn't run that query "
+                    f"(_Reason: {failure.user_message}_)."
+                )
+            )
+            return suggestion_text, [], "", {"type": "alternatives", "alternatives": suggestion.alternatives}
+
+        reply = (
+            f"<@{user_id}> I tried {MAX_RETRIES} times but couldn't run that query.\n\n"
+            f"*Reason:* {failure.user_message}\n\n"
+            f"💡 _Try rephrasing, or ask me something simpler about the same topic._"
+        )
+        return reply, [], "", None
 
     # ── Anomaly detection ─────────────────────────────────────────────────────
-    flags  = detect_anomalies(question, results)
-    summary = summarise_results(question, results)
+    flags  = detect_anomalies(normalised, results)
+    summary = summarise_results(normalised, results)
 
     # ── Build reply ───────────────────────────────────────────────────────────
     reply = summary
@@ -341,8 +533,12 @@ def handle_question(user_id: str, question: str) -> tuple:
 
     # ── Cache + eval log ──────────────────────────────────────────────────────
     latency = round(time.time()-start, 2)
-    save_to_cache(question, summary, sql)
-    log(question=question, sql=sql, rows_returned=len(results),
-        latency_sec=latency, status="pass", anomalies=len(flags))
+    save_to_cache(normalised, summary, sql)
+    log(question=normalised, sql=sql, rows_returned=len(results),
+        latency_sec=latency, status="pass", anomalies=len(flags),
+        normalised_question=normalised, recovery_attempted="no")
 
-    return f"<@{user_id}> {reply}", results, csv_string
+    # Self-learning: promote to RAG + tune thresholds (background thread)
+    on_success(normalised, sql, summary)
+
+    return f"<@{user_id}> {reply}", results, csv_string, None
